@@ -1,0 +1,78 @@
+// Command server runs the GophProfile HTTP API and web interface.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/magicelemental11/gophprofile/internal/config"
+	"github.com/magicelemental11/gophprofile/internal/handlers"
+	"github.com/magicelemental11/gophprofile/internal/logger"
+	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
+)
+
+const shutdownTimeout = 10 * time.Second
+
+func main() {
+	cfg, err := config.LoadServer(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
+	lg, err := logger.New(cfg.LogLevel)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = lg.Sync() }()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, cfg, lg); err != nil {
+		lg.Fatal("server stopped", zap.Error(err))
+	}
+}
+
+func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
+	repo, err := postgres.New(ctx, cfg.DatabaseDSN)
+	if err != nil {
+		return fmt.Errorf("database: %w", err)
+	}
+	defer repo.Close()
+	if err := repo.Migrate(); err != nil {
+		return err
+	}
+
+	srv := &http.Server{
+		Addr:              cfg.Address,
+		Handler:           handlers.NewRouter(handlers.Deps{Logger: lg}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+	lg.Info("server started", zap.String("address", cfg.Address))
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+	}
+	lg.Info("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown: %w", err)
+	}
+	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
