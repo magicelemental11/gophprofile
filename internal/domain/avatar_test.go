@@ -75,3 +75,13 @@ func TestThumbnailKeysOf(t *testing.T) {
 	a := Avatar{ID: "a1", S3Key: "originals/a1.png"}
 	assert.Equal(t, append([]string{"originals/a1.png"}, ThumbnailKeysOf("a1")...), a.AllKeys())
 }
+
+func TestOwnsKey(t *testing.T) {
+	a := Avatar{ID: "a1", S3Key: OriginalKey("a1", FormatWebP)}
+	for _, k := range a.AllKeys() {
+		assert.True(t, OwnsKey("a1", k), k)
+	}
+	for _, k := range []string{"originals/a2.png", "originals/a1.gif", "originals/a1/../a2.png", "thumbnails/a1/50x50.jpg", "thumbnails/a2/100x100.jpg", ""} {
+		assert.False(t, OwnsKey("a1", k), k)
+	}
+}

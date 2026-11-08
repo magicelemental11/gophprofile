@@ -33,8 +33,8 @@ func NewProcessor(repo AvatarRepository, store ObjectStorage, log *zap.Logger) *
 // exist are skipped, and thumbnails of a deleted avatar are removed, so redelivery is safe.
 // Errors wrapping ErrPermanent must not be retried.
 func (p *Processor) Process(ctx context.Context, messageID string, ev domain.AvatarProcessEvent) error {
-	if uuid.Validate(messageID) != nil {
-		return fmt.Errorf("%w: invalid message id %q", ErrPermanent, messageID)
+	if err := validateIDs(messageID, ev.AvatarID); err != nil {
+		return err
 	}
 	for _, op := range ev.Operations {
 		if op.Type != domain.OpResize || !slices.Contains(domain.ThumbnailSizes, op.Size) {
@@ -60,7 +60,12 @@ func (p *Processor) Process(ctx context.Context, messageID string, ev domain.Ava
 		return p.repo.MarkProcessed(ctx, messageID)
 	}
 
-	if err := p.repo.SetProcessingStatus(ctx, a.ID, domain.ProcessingProcessing); err != nil {
+	err = p.repo.SetProcessingStatus(ctx, a.ID, domain.ProcessingProcessing)
+	if errors.Is(err, domain.ErrNotFound) {
+		p.log.Info("avatar deleted before processing", zap.String("avatar_id", a.ID))
+		return p.removeThumbnails(ctx, a.ID)
+	}
+	if err != nil {
 		return err
 	}
 	keys, err := p.thumbnails(ctx, a, ev.Operations)
@@ -81,6 +86,16 @@ func (p *Processor) Process(ctx context.Context, messageID string, ev domain.Ava
 func (p *Processor) removeThumbnails(ctx context.Context, avatarID string) error {
 	if err := p.store.Delete(ctx, domain.ThumbnailKeysOf(avatarID)); err != nil {
 		return fmt.Errorf("remove thumbnails: %w", err)
+	}
+	return nil
+}
+
+func validateIDs(messageID, avatarID string) error {
+	if uuid.Validate(messageID) != nil {
+		return fmt.Errorf("%w: invalid message id %q", ErrPermanent, messageID)
+	}
+	if uuid.Validate(avatarID) != nil {
+		return fmt.Errorf("%w: invalid avatar id %q", ErrPermanent, avatarID)
 	}
 	return nil
 }
@@ -127,26 +142,45 @@ func (p *Processor) thumbnails(ctx context.Context, a domain.Avatar, ops []domai
 	return keys, nil
 }
 
-// DeleteFiles removes the objects of a deleted avatar. A repeated message is skipped.
+// DeleteFiles removes the original and all thumbnails of a deleted avatar. Keys that belong
+// to another avatar make the message permanently invalid. A repeated message is skipped.
 func (p *Processor) DeleteFiles(ctx context.Context, messageID string, ev domain.AvatarDeleteEvent) error {
-	if uuid.Validate(messageID) != nil {
-		return fmt.Errorf("%w: invalid message id %q", ErrPermanent, messageID)
+	if err := validateIDs(messageID, ev.AvatarID); err != nil {
+		return err
+	}
+	keys := domain.ThumbnailKeysOf(ev.AvatarID)
+	for _, k := range ev.S3Keys {
+		if !domain.OwnsKey(ev.AvatarID, k) {
+			return fmt.Errorf("%w: key %q does not belong to avatar %s", ErrPermanent, k, ev.AvatarID)
+		}
+		if !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
 	}
 	done, err := p.repo.IsProcessed(ctx, messageID)
 	if err != nil || done {
 		return err
 	}
-	if len(ev.S3Keys) > 0 {
-		if err := p.store.Delete(ctx, ev.S3Keys); err != nil {
-			return fmt.Errorf("delete files: %w", err)
-		}
+	if err := p.store.Delete(ctx, keys); err != nil {
+		return fmt.Errorf("delete files: %w", err)
 	}
 	return p.repo.MarkProcessed(ctx, messageID)
 }
 
-// MarkFailed records that processing gave up; a missing avatar is not an error.
+// MarkFailed records that processing gave up. A missing avatar is not an error, and an
+// avatar whose thumbnails are already complete keeps its status.
 func (p *Processor) MarkFailed(ctx context.Context, avatarID string) error {
-	err := p.repo.SetProcessingStatus(ctx, avatarID, domain.ProcessingFailed)
+	a, err := p.repo.Get(ctx, avatarID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if a.ProcessingStatus == domain.ProcessingCompleted {
+		return nil
+	}
+	err = p.repo.SetProcessingStatus(ctx, avatarID, domain.ProcessingFailed)
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil
 	}

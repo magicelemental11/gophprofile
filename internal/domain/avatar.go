@@ -107,9 +107,11 @@ func (f Format) Ext() string {
 	return string(f)
 }
 
+var formats = []Format{FormatJPEG, FormatPNG, FormatWebP}
+
 // FormatFromMIME maps a media type back to a supported Format.
 func FormatFromMIME(mime string) (Format, bool) {
-	for _, f := range []Format{FormatJPEG, FormatPNG, FormatWebP} {
+	for _, f := range formats {
 		if f.MIME() == mime {
 			return f, true
 		}
@@ -158,6 +160,21 @@ func ThumbnailKeysOf(avatarID string) []string {
 		keys = append(keys, ThumbnailKey(avatarID, s))
 	}
 	return keys
+}
+
+// OwnsKey reports whether key is the original or a thumbnail of the avatar.
+func OwnsKey(avatarID, key string) bool {
+	for _, f := range formats {
+		if key == OriginalKey(avatarID, f) {
+			return true
+		}
+	}
+	for _, s := range ThumbnailSizes {
+		if key == ThumbnailKey(avatarID, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // OriginalKey returns the object key of the uploaded file.

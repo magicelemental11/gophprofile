@@ -267,3 +267,36 @@ func TestDeleteCurrentForbidden(t *testing.T) {
 	_, err := e.svc.Get(context.Background(), a.ID)
 	assert.NoError(t, err)
 }
+
+func TestDeletePublishesAfterClientGone(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	e.pub.events = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, e.svc.Delete(ctx, "u", a.ID))
+	require.Len(t, e.pub.events, 1)
+	assert.Equal(t, domain.RoutingDeleted, e.pub.events[0].key)
+}
+
+func TestUploadDeletedMidwayRemovesOriginal(t *testing.T) {
+	e := newEnv()
+	e.svc = NewAvatarService(&deleteOnMarkUploaded{fakeRepo: e.repo}, e.store, e.pub, zap.NewNop(), 1<<20)
+
+	_, err := e.svc.Upload(context.Background(), "u", "cat.png", bytes.NewReader(pngBytes(t, 10, 10)))
+	require.ErrorIs(t, err, domain.ErrNotFound)
+	assert.Empty(t, e.store.objects)
+	assert.Empty(t, e.pub.events)
+}
+
+type deleteOnMarkUploaded struct {
+	*fakeRepo
+}
+
+func (r *deleteOnMarkUploaded) MarkUploaded(ctx context.Context, id, etag string) error {
+	if err := r.SoftDelete(ctx, id); err != nil {
+		return err
+	}
+	return r.fakeRepo.MarkUploaded(ctx, id, etag)
+}

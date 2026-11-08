@@ -71,7 +71,7 @@ func TestProcessIsIdempotent(t *testing.T) {
 
 func TestProcessSkipsMissingAvatar(t *testing.T) {
 	e := newEnv()
-	assert.NoError(t, newProcessor(e).Process(context.Background(), uuid.NewString(), processEvent("gone")))
+	assert.NoError(t, newProcessor(e).Process(context.Background(), uuid.NewString(), processEvent(uuid.NewString())))
 	assert.Zero(t, e.store.puts)
 }
 
@@ -219,22 +219,45 @@ func TestDeleteFilesIsIdempotent(t *testing.T) {
 	assert.True(t, e.store.has(a.S3Key))
 }
 
-func TestDeleteFilesEmptyKeys(t *testing.T) {
+func TestDeleteFilesEmptyKeysStillRemovesThumbnails(t *testing.T) {
 	e := newEnv()
+	a := e.upload(t, "u")
 	p := newProcessor(e)
+	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
 	msg := uuid.NewString()
-	e.store.delErr = errBoom
 
-	require.NoError(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: "a"}))
+	require.NoError(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID}))
+	for _, k := range domain.ThumbnailKeysOf(a.ID) {
+		assert.False(t, e.store.has(k), k)
+	}
 	assert.True(t, e.repo.processed[msg])
+}
+
+func TestDeleteFilesRejectsForeignKeys(t *testing.T) {
+	e := newEnv()
+	victim := e.upload(t, "victim")
+	p := newProcessor(e)
+	id := uuid.NewString()
+
+	for _, keys := range [][]string{
+		{victim.S3Key},
+		{domain.ThumbnailKey(victim.ID, domain.Size100)},
+		{"originals/" + id + "/../" + victim.ID + ".png"},
+	} {
+		err := p.DeleteFiles(context.Background(), uuid.NewString(), domain.AvatarDeleteEvent{AvatarID: id, S3Keys: keys})
+		assert.ErrorIs(t, err, ErrPermanent, keys)
+	}
+	assert.True(t, e.store.has(victim.S3Key))
 }
 
 func TestDeleteFilesErrors(t *testing.T) {
 	e := newEnv()
 	p := newProcessor(e)
-	ev := domain.AvatarDeleteEvent{AvatarID: "a", S3Keys: []string{"originals/a.png"}}
+	id := uuid.NewString()
+	ev := domain.AvatarDeleteEvent{AvatarID: id, S3Keys: []string{"originals/" + id + ".png"}}
 
 	assert.ErrorIs(t, p.DeleteFiles(context.Background(), "not-a-uuid", ev), ErrPermanent)
+	assert.ErrorIs(t, p.DeleteFiles(context.Background(), uuid.NewString(), domain.AvatarDeleteEvent{AvatarID: "x/../y"}), ErrPermanent)
 
 	msg := uuid.NewString()
 	e.store.delErr = errBoom
@@ -243,4 +266,43 @@ func TestDeleteFilesErrors(t *testing.T) {
 
 	e.repo.failNext = errBoom
 	assert.ErrorIs(t, p.DeleteFiles(context.Background(), uuid.NewString(), ev), errBoom)
+}
+
+func TestProcessRejectsInvalidAvatarID(t *testing.T) {
+	e := newEnv()
+	e.store.delErr = errBoom
+	err := newProcessor(e).Process(context.Background(), uuid.NewString(), processEvent("x/../originals/abc"))
+	assert.ErrorIs(t, err, ErrPermanent)
+}
+
+func TestProcessDeletedBeforeStatusUpdate(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	p := NewProcessor(&deleteOnStatus{fakeRepo: e.repo}, e.store, zap.NewNop())
+
+	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), "no retry for a deleted avatar")
+	assert.Zero(t, e.store.puts-1, "no thumbnails uploaded")
+}
+
+type deleteOnStatus struct {
+	*fakeRepo
+}
+
+func (r *deleteOnStatus) SetProcessingStatus(ctx context.Context, id string, s domain.ProcessingStatus) error {
+	if err := r.SoftDelete(ctx, id); err != nil {
+		return err
+	}
+	return r.fakeRepo.SetProcessingStatus(ctx, id, s)
+}
+
+func TestMarkFailedKeepsCompletedAvatar(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	p := newProcessor(e)
+	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
+
+	require.NoError(t, p.MarkFailed(context.Background(), a.ID))
+	got, err := e.repo.Get(context.Background(), a.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusReady, got.Status())
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -78,12 +79,17 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 		return domain.Avatar{}, err
 	}
 	if err := s.repo.MarkUploaded(ctx, a.ID, etag); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			if errDel := s.store.Delete(context.WithoutCancel(ctx), []string{a.S3Key}); errDel != nil {
+				s.log.Error("remove original of avatar deleted during upload", zap.String("avatar_id", a.ID), zap.Error(errDel))
+			}
+		}
 		return domain.Avatar{}, err
 	}
 	a.UploadStatus, a.ETag = domain.UploadUploaded, etag
 
 	event := domain.AvatarUploadEvent{AvatarID: a.ID, UserID: a.UserID, S3Key: a.S3Key}
-	if err := s.pub.Publish(ctx, domain.RoutingUploaded, event); err != nil {
+	if err := s.pub.Publish(context.WithoutCancel(ctx), domain.RoutingUploaded, event); err != nil {
 		s.log.Error("publish upload event", zap.String("avatar_id", a.ID), zap.Error(err))
 	}
 	return a, nil
@@ -188,7 +194,7 @@ func (s *AvatarService) delete(ctx context.Context, requesterID string, a domain
 		return err
 	}
 	event := domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}
-	if err := s.pub.Publish(ctx, domain.RoutingDeleted, event); err != nil {
+	if err := s.pub.Publish(context.WithoutCancel(ctx), domain.RoutingDeleted, event); err != nil {
 		s.log.Error("publish delete event", zap.String("avatar_id", a.ID), zap.Error(err))
 	}
 	return nil

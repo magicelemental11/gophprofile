@@ -253,11 +253,14 @@ type fakePublisher struct {
 	err    error
 }
 
-func (p *fakePublisher) Publish(_ context.Context, key string, event any) error {
+func (p *fakePublisher) Publish(ctx context.Context, key string, event any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.err != nil {
 		return p.err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	p.events = append(p.events, published{key, event})
 	return nil
