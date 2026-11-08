@@ -46,12 +46,12 @@ func (r *Repository) GetLatestByUser(ctx context.Context, userID string) (domain
 	return scanAvatar(row)
 }
 
-// ListByUser returns the user's non-deleted avatars, newest first.
+// ListByUser returns the user's uploaded, non-deleted avatars, newest first.
 func (r *Repository) ListByUser(ctx context.Context, userID string) ([]domain.Avatar, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT `+avatarColumns+` FROM avatars
-		WHERE user_id = $1 AND deleted_at IS NULL
-		ORDER BY created_at DESC`, userID)
+		WHERE user_id = $1 AND deleted_at IS NULL AND upload_status = $2
+		ORDER BY created_at DESC`, userID, domain.UploadUploaded)
 	if err != nil {
 		return nil, fmt.Errorf("list avatars: %w", err)
 	}

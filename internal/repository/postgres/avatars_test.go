@@ -87,6 +87,7 @@ func TestListByUser(t *testing.T) {
 	list, err := r.ListByUser(context.Background(), "u")
 	require.NoError(t, err)
 	db.lastSQL(t, `ORDER BY created_at DESC`)
+	db.lastSQL(t, `upload_status = \$2`)
 	require.Len(t, list, 2)
 	assert.Equal(t, other, list[1].ID)
 

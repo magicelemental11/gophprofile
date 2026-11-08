@@ -96,9 +96,11 @@ func TestLatestAndList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, second.ID, latest.ID)
 
+	_, err = r.Create(ctx, newAvatar("u"))
+	require.NoError(t, err)
 	list, err := r.ListByUser(ctx, "u")
 	require.NoError(t, err)
-	require.Len(t, list, 2)
+	require.Len(t, list, 2, "an avatar still uploading is not listed")
 	assert.Equal(t, second.ID, list[0].ID)
 
 	empty, err := r.ListByUser(ctx, "nobody")

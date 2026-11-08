@@ -96,7 +96,7 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 	return a, nil
 }
 
-// Get returns avatar metadata.
+// Get returns the metadata of a non-deleted avatar.
 func (s *AvatarService) Get(ctx context.Context, id string) (domain.Avatar, error) {
 	return s.repo.Get(ctx, id)
 }

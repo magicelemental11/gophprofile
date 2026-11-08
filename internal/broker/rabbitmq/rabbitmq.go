@@ -15,7 +15,7 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
 
-// Topology names.
+// Exchanges and queues declared by Dial; failed messages end up in QueueDead.
 const (
 	Exchange        = "avatars.exchange"
 	DeadLetter      = "avatars.dlx"
@@ -26,7 +26,7 @@ const (
 
 const confirmTimeout = 5 * time.Second
 
-// Message is a delivered event.
+// Message is a delivered event; ID is the message id set by Publish and used for deduplication.
 type Message struct {
 	ID         string
 	RoutingKey string
@@ -96,7 +96,7 @@ func declareTopology(ch *amqp.Channel) error {
 	return nil
 }
 
-// Close closes the connection.
+// Close closes the connection together with all channels and consumers on it.
 func (b *Broker) Close() error {
 	return b.conn.Close()
 }

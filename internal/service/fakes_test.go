@@ -92,7 +92,7 @@ func (r *fakeRepo) ListByUser(_ context.Context, userID string) ([]domain.Avatar
 	}
 	list := []domain.Avatar{}
 	for id, a := range r.avatars {
-		if a.UserID == userID && !r.deleted[id] {
+		if a.UserID == userID && !r.deleted[id] && a.UploadStatus == domain.UploadUploaded {
 			list = append(list, a)
 		}
 	}

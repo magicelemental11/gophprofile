@@ -143,7 +143,8 @@ func (p *Processor) thumbnails(ctx context.Context, a domain.Avatar, ops []domai
 }
 
 // DeleteFiles removes the original and all thumbnails of a deleted avatar. Keys that belong
-// to another avatar make the message permanently invalid. A repeated message is skipped.
+// to another avatar or an avatar that is not deleted make the message permanently invalid.
+// A repeated message is skipped.
 func (p *Processor) DeleteFiles(ctx context.Context, messageID string, ev domain.AvatarDeleteEvent) error {
 	if err := validateIDs(messageID, ev.AvatarID); err != nil {
 		return err
@@ -159,6 +160,13 @@ func (p *Processor) DeleteFiles(ctx context.Context, messageID string, ev domain
 	}
 	done, err := p.repo.IsProcessed(ctx, messageID)
 	if err != nil || done {
+		return err
+	}
+	_, err = p.repo.Get(ctx, ev.AvatarID)
+	if err == nil {
+		return fmt.Errorf("%w: avatar %s is not deleted", ErrPermanent, ev.AvatarID)
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
 		return err
 	}
 	if err := p.store.Delete(ctx, keys); err != nil {

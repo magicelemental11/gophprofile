@@ -198,6 +198,7 @@ func TestDeleteFiles(t *testing.T) {
 	p := newProcessor(e)
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
 	ev := domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}
+	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID))
 	msg := uuid.NewString()
 
 	require.NoError(t, p.DeleteFiles(context.Background(), msg, ev))
@@ -205,6 +206,18 @@ func TestDeleteFiles(t *testing.T) {
 		assert.False(t, e.store.has(k), k)
 	}
 	assert.True(t, e.repo.processed[msg])
+}
+
+func TestDeleteFilesKeepsLiveAvatar(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	p := newProcessor(e)
+	msg := uuid.NewString()
+
+	err := p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()})
+	assert.ErrorIs(t, err, ErrPermanent)
+	assert.True(t, e.store.has(a.S3Key))
+	assert.False(t, e.repo.processed[msg])
 }
 
 func TestDeleteFilesIsIdempotent(t *testing.T) {
@@ -224,6 +237,7 @@ func TestDeleteFilesEmptyKeysStillRemovesThumbnails(t *testing.T) {
 	a := e.upload(t, "u")
 	p := newProcessor(e)
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
+	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID))
 	msg := uuid.NewString()
 
 	require.NoError(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID}))

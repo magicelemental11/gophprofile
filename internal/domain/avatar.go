@@ -9,7 +9,7 @@ import (
 // UploadStatus tracks whether the original file reached object storage.
 type UploadStatus string
 
-// Upload statuses.
+// Upload statuses: uploading until the original is stored, then uploaded or failed.
 const (
 	UploadUploading UploadStatus = "uploading"
 	UploadUploaded  UploadStatus = "uploaded"
@@ -19,7 +19,7 @@ const (
 // ProcessingStatus tracks thumbnail generation.
 type ProcessingStatus string
 
-// Processing statuses.
+// Processing statuses: pending until the worker takes the avatar, completed once all thumbnails exist.
 const (
 	ProcessingPending    ProcessingStatus = "pending"
 	ProcessingProcessing ProcessingStatus = "processing"
@@ -37,7 +37,7 @@ const (
 // Size is a requested avatar variant.
 type Size string
 
-// Supported sizes.
+// Sizes accepted by the size query parameter.
 const (
 	SizeOriginal Size = "original"
 	Size100      Size = "100x100"
@@ -72,7 +72,7 @@ func (s Size) Dimensions() (width, height int) {
 // Format is an image encoding.
 type Format string
 
-// Supported formats.
+// Formats accepted for upload and by the format query parameter.
 const (
 	FormatJPEG Format = "jpeg"
 	FormatPNG  Format = "png"

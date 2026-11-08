@@ -19,7 +19,7 @@ const (
 	maxDelay  = 30 * time.Second
 )
 
-// Message is a delivered broker message.
+// Message is a broker message reduced to what the worker needs: id, routing key and body.
 type Message struct {
 	ID         string
 	RoutingKey string

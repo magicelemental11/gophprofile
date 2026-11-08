@@ -218,9 +218,13 @@ func TestOpenLatestGetList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, second.ID, got.ID)
 
+	e.store.putFails = 1
+	_, err = e.svc.Upload(context.Background(), "u", "cat.png", bytes.NewReader(pngBytes(t, 10, 10)))
+	require.Error(t, err)
+
 	list, err := e.svc.List(context.Background(), "u")
 	require.NoError(t, err)
-	require.Len(t, list, 2)
+	require.Len(t, list, 2, "a failed upload is not listed")
 	assert.Equal(t, second.ID, list[0].ID)
 }
 
