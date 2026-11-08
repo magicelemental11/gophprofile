@@ -14,10 +14,12 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
 	"github.com/magicelemental11/gophprofile/internal/config"
 	"github.com/magicelemental11/gophprofile/internal/handlers"
 	"github.com/magicelemental11/gophprofile/internal/logger"
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
+	"github.com/magicelemental11/gophprofile/internal/storage/s3"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -50,10 +52,23 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 	if err := repo.Migrate(); err != nil {
 		return err
 	}
+	store, err := s3.New(ctx, cfg.S3)
+	if err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	broker, err := rabbitmq.Dial(cfg.AMQPURL)
+	if err != nil {
+		return fmt.Errorf("broker: %w", err)
+	}
+	defer func() { _ = broker.Close() }()
 
+	router := handlers.NewRouter(handlers.Deps{
+		Logger: lg,
+		Health: map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
+	})
 	srv := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           handlers.NewRouter(handlers.Deps{Logger: lg}),
+		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errCh := make(chan error, 1)
