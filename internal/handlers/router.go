@@ -14,8 +14,9 @@ const requestTimeout = 30 * time.Second
 
 // Deps holds what the router needs to serve requests.
 type Deps struct {
-	Logger *zap.Logger
-	Health map[string]Pinger
+	Logger  *zap.Logger
+	Health  map[string]Pinger
+	Avatars AvatarService
 }
 
 // NewRouter builds the HTTP handler with all routes and middleware.
@@ -24,6 +25,15 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(middleware.RequestID, logRequests(d.Logger), middleware.Recoverer, middleware.Timeout(requestTimeout))
 
 	r.Get("/health", health(d.Health, healthTimeout))
+
+	h := &api{svc: d.Avatars, log: d.Logger}
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Post("/avatars", h.upload)
+		r.Get("/avatars/{id}", h.image)
+		r.Get("/avatars/{id}/metadata", h.metadata)
+		r.Get("/users/{user_id}/avatar", h.userImage)
+		r.Get("/users/{user_id}/avatars", h.list)
+	})
 	return r
 }
 

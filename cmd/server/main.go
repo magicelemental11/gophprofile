@@ -19,6 +19,7 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/handlers"
 	"github.com/magicelemental11/gophprofile/internal/logger"
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
+	"github.com/magicelemental11/gophprofile/internal/service"
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
 )
 
@@ -63,8 +64,9 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 	defer func() { _ = broker.Close() }()
 
 	router := handlers.NewRouter(handlers.Deps{
-		Logger: lg,
-		Health: map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
+		Logger:  lg,
+		Health:  map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
+		Avatars: service.NewAvatarService(repo, store, broker, lg, cfg.MaxUploadSize),
 	})
 	srv := &http.Server{
 		Addr:              cfg.Address,

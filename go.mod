@@ -3,6 +3,8 @@ module github.com/magicelemental11/gophprofile
 go 1.26.1
 
 require (
+	github.com/HugoSmits86/nativewebp v1.3.0
+	github.com/disintegration/imaging v1.6.2
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/uuid v1.6.0
@@ -14,6 +16,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.45.0
 	go.uber.org/zap v1.28.0
+	golang.org/x/image v0.47.0
 )
 
 require (
