@@ -37,7 +37,7 @@ test-integration:
 	go test -race -tags integration ./...
 
 cover:
-	go test -race -coverprofile=cover.out ./...
+	go test -race -coverprofile=cover.out $$(go list ./... | grep -v /cmd/)
 	go tool cover -func=cover.out | tail -1
 
 lint:

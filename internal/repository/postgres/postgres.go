@@ -9,15 +9,25 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/magicelemental11/gophprofile/migrations"
 )
 
+type db interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // Repository is a PostgreSQL-backed store, safe for concurrent use.
 type Repository struct {
 	pool *pgxpool.Pool
+	db   db
 }
 
 // New connects to the database at dsn.
@@ -30,7 +40,7 @@ func New(ctx context.Context, dsn string) (*Repository, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping: %w", err)
 	}
-	return &Repository{pool: pool}, nil
+	return &Repository{pool: pool, db: pool}, nil
 }
 
 // Close releases all database connections.

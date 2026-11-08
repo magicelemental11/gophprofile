@@ -16,7 +16,7 @@ const avatarColumns = `id, user_id, file_name, mime_type, size_bytes, width, hei
 
 // Create inserts a new avatar with the id set by the caller and returns the stored row.
 func (r *Repository) Create(ctx context.Context, a domain.Avatar) (domain.Avatar, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.QueryRow(ctx, `
 		INSERT INTO avatars (id, user_id, file_name, mime_type, size_bytes, width, height, s3_key)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING `+avatarColumns,
@@ -33,13 +33,13 @@ func (r *Repository) Get(ctx context.Context, id string) (domain.Avatar, error) 
 	if !validUUID(id) {
 		return domain.Avatar{}, domain.ErrNotFound
 	}
-	row := r.pool.QueryRow(ctx, `SELECT `+avatarColumns+` FROM avatars WHERE id = $1 AND deleted_at IS NULL`, id)
+	row := r.db.QueryRow(ctx, `SELECT `+avatarColumns+` FROM avatars WHERE id = $1 AND deleted_at IS NULL`, id)
 	return scanAvatar(row)
 }
 
 // GetLatestByUser returns the newest uploaded, non-deleted avatar of the user.
 func (r *Repository) GetLatestByUser(ctx context.Context, userID string) (domain.Avatar, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.QueryRow(ctx, `
 		SELECT `+avatarColumns+` FROM avatars
 		WHERE user_id = $1 AND deleted_at IS NULL AND upload_status = $2
 		ORDER BY created_at DESC LIMIT 1`, userID, domain.UploadUploaded)
@@ -48,7 +48,7 @@ func (r *Repository) GetLatestByUser(ctx context.Context, userID string) (domain
 
 // ListByUser returns the user's non-deleted avatars, newest first.
 func (r *Repository) ListByUser(ctx context.Context, userID string) ([]domain.Avatar, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT `+avatarColumns+` FROM avatars
 		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC`, userID)
@@ -90,7 +90,7 @@ func (r *Repository) SetProcessingStatus(ctx context.Context, id string, s domai
 // in one transaction. It reports false and leaves the message unrecorded when the avatar was
 // deleted meanwhile, so cleanup can be retried.
 func (r *Repository) CompleteProcessing(ctx context.Context, id string, keys map[domain.Size]string, messageID string) (bool, error) {
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin: %w", err)
 	}
@@ -125,7 +125,7 @@ func (r *Repository) IsProcessed(ctx context.Context, messageID string) (bool, e
 		return false, nil
 	}
 	var ok bool
-	err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM processed_messages WHERE message_id = $1)`, messageID).Scan(&ok)
+	err := r.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM processed_messages WHERE message_id = $1)`, messageID).Scan(&ok)
 	if err != nil {
 		return false, fmt.Errorf("check message: %w", err)
 	}
@@ -134,7 +134,7 @@ func (r *Repository) IsProcessed(ctx context.Context, messageID string) (bool, e
 
 // MarkProcessed records a handled message id; repeated calls are no-ops.
 func (r *Repository) MarkProcessed(ctx context.Context, messageID string) error {
-	_, err := r.pool.Exec(ctx, `INSERT INTO processed_messages (message_id) VALUES ($1) ON CONFLICT DO NOTHING`, messageID)
+	_, err := r.db.Exec(ctx, `INSERT INTO processed_messages (message_id) VALUES ($1) ON CONFLICT DO NOTHING`, messageID)
 	if err != nil {
 		return fmt.Errorf("record message: %w", err)
 	}
@@ -145,7 +145,7 @@ func (r *Repository) exec(ctx context.Context, sql string, id string, args ...an
 	if !validUUID(id) {
 		return domain.ErrNotFound
 	}
-	tag, err := r.pool.Exec(ctx, sql, append([]any{id}, args...)...)
+	tag, err := r.db.Exec(ctx, sql, append([]any{id}, args...)...)
 	if err != nil {
 		return fmt.Errorf("update avatar: %w", err)
 	}

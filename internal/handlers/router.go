@@ -34,7 +34,7 @@ func NewRouter(d Deps) http.Handler {
 		corsHandler(d.Security.CORSAllowedOrigins),
 	)
 
-	r.Get("/health", health(d.Health, healthTimeout))
+	r.Get("/health", health(d.Logger, d.Health, healthTimeout))
 
 	h := &api{svc: d.Avatars, log: d.Logger}
 	uploadLimit := rateLimit(d.Security.UploadRateLimit, time.Minute)

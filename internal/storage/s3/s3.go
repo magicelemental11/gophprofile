@@ -82,7 +82,7 @@ func (s *Storage) Delete(ctx context.Context, keys []string) error {
 func (s *Storage) Ping(ctx context.Context) error {
 	ok, err := s.client.BucketExists(ctx, s.bucket)
 	if err != nil {
-		return err
+		return fmt.Errorf("check bucket %s: %w", s.bucket, err)
 	}
 	if !ok {
 		return fmt.Errorf("bucket %s does not exist", s.bucket)

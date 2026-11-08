@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const healthTimeout = 2 * time.Second
@@ -19,7 +21,7 @@ type healthResponse struct {
 	Components map[string]string `json:"components"`
 }
 
-func health(checks map[string]Pinger, timeout time.Duration) http.HandlerFunc {
+func health(log *zap.Logger, checks map[string]Pinger, timeout time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
@@ -33,7 +35,8 @@ func health(checks map[string]Pinger, timeout time.Duration) http.HandlerFunc {
 				defer wg.Done()
 				state := "ok"
 				if err := p.Ping(ctx); err != nil {
-					state = "error: " + err.Error()
+					log.Warn("health check failed", zap.String("component", name), zap.Error(err))
+					state = "error"
 				}
 				mu.Lock()
 				resp.Components[name] = state

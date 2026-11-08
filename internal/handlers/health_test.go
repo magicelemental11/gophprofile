@@ -31,7 +31,7 @@ func TestHealthDegraded(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.JSONEq(t, `{"status":"degraded","components":{"database":"ok","storage":"error: connection refused"}}`, rec.Body.String())
+	assert.JSONEq(t, `{"status":"degraded","components":{"database":"ok","storage":"error"}}`, rec.Body.String())
 }
 
 func TestHealthTimeout(t *testing.T) {
@@ -39,9 +39,9 @@ func TestHealthTimeout(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	})
-	h := health(map[string]Pinger{"broker": slow}, 1)
+	h := health(zap.NewNop(), map[string]Pinger{"broker": slow}, 1)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "deadline exceeded")
+	assert.JSONEq(t, `{"status":"degraded","components":{"broker":"error"}}`, rec.Body.String())
 }
