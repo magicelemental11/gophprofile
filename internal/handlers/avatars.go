@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -92,6 +93,14 @@ func metadata(a domain.Avatar) metadataResponse {
 	}
 }
 
+func pathParam(r *http.Request, name string) string {
+	v := chi.URLParam(r, name)
+	if u, err := url.PathUnescape(v); err == nil {
+		return u
+	}
+	return v
+}
+
 func userID(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get("X-User-ID"))
 }
@@ -167,7 +176,7 @@ func (h *api) image(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	img, err := h.svc.Open(r.Context(), chi.URLParam(r, "id"), size, format)
+	img, err := h.svc.Open(r.Context(), pathParam(r, "id"), size, format)
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -181,7 +190,7 @@ func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	img, err := h.svc.OpenLatest(r.Context(), chi.URLParam(r, "user_id"), size, format)
+	img, err := h.svc.OpenLatest(r.Context(), pathParam(r, "user_id"), size, format)
 	if errors.Is(err, domain.ErrNotFound) {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Cache-Control", "public, max-age=300")
@@ -210,7 +219,7 @@ func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Imag
 }
 
 func (h *api) metadata(w http.ResponseWriter, r *http.Request) {
-	a, err := h.svc.Get(r.Context(), chi.URLParam(r, "id"))
+	a, err := h.svc.Get(r.Context(), pathParam(r, "id"))
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -219,7 +228,7 @@ func (h *api) metadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *api) list(w http.ResponseWriter, r *http.Request) {
-	avatars, err := h.svc.List(r.Context(), chi.URLParam(r, "user_id"))
+	avatars, err := h.svc.List(r.Context(), pathParam(r, "user_id"))
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -236,7 +245,7 @@ func (h *api) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.respondDeleted(w, h.svc.Delete(r.Context(), uid, chi.URLParam(r, "id")))
+	h.respondDeleted(w, h.svc.Delete(r.Context(), uid, pathParam(r, "id")))
 }
 
 func (h *api) deleteCurrent(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +253,7 @@ func (h *api) deleteCurrent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.respondDeleted(w, h.svc.DeleteCurrent(r.Context(), uid, chi.URLParam(r, "user_id")))
+	h.respondDeleted(w, h.svc.DeleteCurrent(r.Context(), uid, pathParam(r, "user_id")))
 }
 
 func (h *api) respondDeleted(w http.ResponseWriter, err error) {
@@ -256,24 +265,29 @@ func (h *api) respondDeleted(w http.ResponseWriter, err error) {
 }
 
 func (h *api) fail(w http.ResponseWriter, err error) {
+	code, body := h.classify(err)
+	writeJSON(w, code, body)
+}
+
+func (h *api) classify(err error) (int, errorBody) {
 	var tooLarge *http.MaxBytesError
 	switch {
 	case errors.Is(err, domain.ErrTooLarge), errors.As(err, &tooLarge):
-		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Error: "File too large", MaxSize: h.svc.MaxSize()})
+		return http.StatusRequestEntityTooLarge, errorBody{Error: "File too large", MaxSize: h.svc.MaxSize()}
 	case errors.Is(err, domain.ErrInvalidFormat):
-		writeError(w, http.StatusBadRequest, "Invalid file format", "Supported formats: jpeg, png, webp")
+		return http.StatusBadRequest, errorBody{Error: "Invalid file format", Details: "Supported formats: jpeg, png, webp"}
 	case errors.Is(err, domain.ErrInvalidParam):
-		writeError(w, http.StatusBadRequest, "Invalid parameter", err.Error())
+		return http.StatusBadRequest, errorBody{Error: "Invalid parameter", Details: err.Error()}
 	case errors.Is(err, errNotMultipart):
-		writeError(w, http.StatusBadRequest, "Invalid multipart form", "")
+		return http.StatusBadRequest, errorBody{Error: "Invalid multipart form"}
 	case errors.Is(err, errNoFile):
-		writeError(w, http.StatusBadRequest, "Missing file field", "")
+		return http.StatusBadRequest, errorBody{Error: "Missing file field"}
 	case errors.Is(err, domain.ErrNotFound):
-		writeError(w, http.StatusNotFound, "Avatar not found", "")
+		return http.StatusNotFound, errorBody{Error: "Avatar not found"}
 	case errors.Is(err, domain.ErrForbidden):
-		writeError(w, http.StatusForbidden, "Forbidden", "You can only delete your own avatars")
+		return http.StatusForbidden, errorBody{Error: "Forbidden", Details: "You can only delete your own avatars"}
 	default:
 		h.log.Error("request failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "Internal server error", "")
+		return http.StatusInternalServerError, errorBody{Error: "Internal server error"}
 	}
 }

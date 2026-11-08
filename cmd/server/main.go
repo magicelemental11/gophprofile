@@ -45,6 +45,10 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
+	web, err := handlers.NewWeb(os.DirFS(cfg.WebDir))
+	if err != nil {
+		return err
+	}
 	repo, err := postgres.New(ctx, cfg.DatabaseDSN)
 	if err != nil {
 		return fmt.Errorf("database: %w", err)
@@ -67,6 +71,7 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 		Logger:  lg,
 		Health:  map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
 		Avatars: service.NewAvatarService(repo, store, broker, lg, cfg.MaxUploadSize),
+		Web:     web,
 	})
 	srv := &http.Server{
 		Addr:              cfg.Address,

@@ -17,6 +17,7 @@ type Deps struct {
 	Logger  *zap.Logger
 	Health  map[string]Pinger
 	Avatars AvatarService
+	Web     *Web
 }
 
 // NewRouter builds the HTTP handler with all routes and middleware.
@@ -36,6 +37,9 @@ func NewRouter(d Deps) http.Handler {
 		r.Delete("/users/{user_id}/avatar", h.deleteCurrent)
 		r.Get("/users/{user_id}/avatars", h.list)
 	})
+	if d.Web != nil {
+		(&webHandler{api: h, web: d.Web}).mount(r)
+	}
 	return r
 }
 

@@ -329,3 +329,19 @@ func TestDeleteErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestEscapedUserIDInPath(t *testing.T) {
+	a := testAvatar()
+	a.UserID = "go/pher@example.com"
+	svc := &fakeService{avatars: map[string]domain.Avatar{a.ID: a}}
+
+	rec := serve(svc, httptest.NewRequest(http.MethodGet, "/api/v1/users/go%2Fpher%40example.com/avatars", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var list []map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list))
+	assert.Len(t, list, 1)
+
+	rec = serve(svc, httptest.NewRequest(http.MethodGet, "/api/v1/users/go%2Fpher%40example.com/avatar", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "go/pher@example.com", svc.opened.user)
+}
