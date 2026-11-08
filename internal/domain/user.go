@@ -15,7 +15,7 @@ const (
 
 var userIDPattern = regexp.MustCompile(`^[A-Za-z0-9._%+@-]+$`)
 
-// ValidUserID reports whether id is a non-empty user identifier of up to 255 safe characters.
+// ValidUserID reports whether id is a non-empty user identifier of up to MaxUserIDLength safe characters.
 func ValidUserID(id string) bool {
 	return len(id) <= MaxUserIDLength && userIDPattern.MatchString(id)
 }

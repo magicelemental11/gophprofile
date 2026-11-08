@@ -16,7 +16,7 @@ import (
 // Security holds the request limits and the CORS policy; zero limits disable rate limiting.
 type Security struct {
 	CORSAllowedOrigins []string
-	APIRateLimit       int
+	RateLimitRPS       int
 	UploadRateLimit    int
 }
 
@@ -63,10 +63,14 @@ func noSniff(next http.Handler) http.Handler {
 	})
 }
 
+func writeInvalidUser(w http.ResponseWriter) {
+	writeError(w, http.StatusBadRequest, "Invalid user id", "")
+}
+
 func validUserPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !domain.ValidUserID(pathParam(r, "user_id")) {
-			writeError(w, http.StatusBadRequest, "Invalid user id", "")
+			writeInvalidUser(w)
 			return
 		}
 		next.ServeHTTP(w, r)

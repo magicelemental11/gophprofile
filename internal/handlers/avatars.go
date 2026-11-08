@@ -115,7 +115,7 @@ func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	if !domain.ValidUserID(uid) {
-		writeError(w, http.StatusBadRequest, "Invalid user id", "")
+		writeInvalidUser(w)
 		return "", false
 	}
 	return uid, true

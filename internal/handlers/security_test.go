@@ -43,9 +43,9 @@ func TestUploadRateLimitSharedByAPIAndWeb(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, do(h, other).Code)
 }
 
-func TestAPIRateLimit(t *testing.T) {
+func TestRateLimitRPS(t *testing.T) {
 	svc := &fakeService{avatars: map[string]domain.Avatar{"a1": testAvatar()}}
-	h := secureRouter(t, svc, Security{APIRateLimit: 2})
+	h := secureRouter(t, svc, Security{RateLimitRPS: 2})
 	for range 2 {
 		assert.Equal(t, http.StatusOK, do(h, httptest.NewRequest(http.MethodGet, "/api/v1/avatars/a1/metadata", nil)).Code)
 	}

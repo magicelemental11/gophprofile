@@ -74,7 +74,7 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 		Web:     web,
 		Security: handlers.Security{
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
-			APIRateLimit:       cfg.RateLimitRPS,
+			RateLimitRPS:       cfg.RateLimitRPS,
 			UploadRateLimit:    cfg.UploadRateLimit,
 		},
 	})

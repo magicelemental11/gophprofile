@@ -39,7 +39,7 @@ func NewRouter(d Deps) http.Handler {
 	h := &api{svc: d.Avatars, log: d.Logger}
 	uploadLimit := rateLimit(d.Security.UploadRateLimit, time.Minute)
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(rateLimit(d.Security.APIRateLimit, time.Second))
+		r.Use(rateLimit(d.Security.RateLimitRPS, time.Second))
 		r.With(uploadLimit).Post("/avatars", h.upload)
 		r.Get("/avatars/{id}", h.image)
 		r.Delete("/avatars/{id}", h.delete)
