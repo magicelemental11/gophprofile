@@ -38,7 +38,7 @@
     try {
       localStorage.setItem(storageKey, id);
     } catch {
-      /* storage unavailable */
+      return;
     }
   }
 

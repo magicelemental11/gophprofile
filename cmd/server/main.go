@@ -87,8 +87,11 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 	select {
 	case err := <-errCh:
 		return err
-	case amqpErr := <-closed:
-		runErr = fmt.Errorf("broker connection lost: %w", amqpErr)
+	case amqpErr, ok := <-closed:
+		runErr = errors.New("broker connection closed")
+		if ok {
+			runErr = fmt.Errorf("broker connection lost: %w", amqpErr)
+		}
 	case <-ctx.Done():
 	}
 	lg.Info("shutting down")

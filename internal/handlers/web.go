@@ -17,6 +17,8 @@ import (
 
 const maxUserIDField = 1 << 10
 
+var errNoUser = errors.New("missing user id field")
+
 // Web holds the web interface: the page template and the static assets.
 type Web struct {
 	page   *template.Template
@@ -74,8 +76,6 @@ func (h *webHandler) upload(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/web/gallery/"+url.PathEscape(uid), http.StatusSeeOther)
 	}
 }
-
-var errNoUser = errors.New("missing user id field")
 
 func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request) (string, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.svc.MaxSize()+multipartOverhead)

@@ -95,6 +95,9 @@ func metadata(a domain.Avatar) metadataResponse {
 
 func pathParam(r *http.Request, name string) string {
 	v := chi.URLParam(r, name)
+	if r.URL.RawPath == "" {
+		return v
+	}
 	if u, err := url.PathUnescape(v); err == nil {
 		return u
 	}

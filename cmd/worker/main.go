@@ -78,8 +78,11 @@ func run(ctx context.Context, cfg config.Worker, lg *zap.Logger) error {
 	var runErr error
 	select {
 	case <-ctx.Done():
-	case amqpErr := <-closed:
-		runErr = fmt.Errorf("broker connection lost: %w", amqpErr)
+	case amqpErr, ok := <-closed:
+		runErr = errors.New("broker connection closed")
+		if ok {
+			runErr = fmt.Errorf("broker connection lost: %w", amqpErr)
+		}
 	case runErr = <-errCh:
 		queues = queues[1:]
 	}

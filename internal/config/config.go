@@ -53,6 +53,17 @@ var commonBindings = []binding{
 	{"s3-use-ssl", "S3_USE_SSL"},
 }
 
+var serverBindings = []binding{
+	{"a", "ADDRESS"},
+	{"max-upload-size", "MAX_UPLOAD_SIZE"},
+	{"web-dir", "WEB_DIR"},
+}
+
+var workerBindings = []binding{
+	{"prefetch", "WORKER_PREFETCH"},
+	{"max-retries", "WORKER_MAX_RETRIES"},
+}
+
 // LoadServer parses args into a Server config. Precedence: flag, environment variable, default.
 func LoadServer(args []string) (Server, error) {
 	var cfg Server
@@ -61,12 +72,7 @@ func LoadServer(args []string) (Server, error) {
 	fs.StringVar(&cfg.Address, "a", ":8080", "listen address (env ADDRESS)")
 	fs.Int64Var(&cfg.MaxUploadSize, "max-upload-size", 10<<20, "maximum upload size in bytes (env MAX_UPLOAD_SIZE)")
 	fs.StringVar(&cfg.WebDir, "web-dir", "./web", "web interface directory (env WEB_DIR)")
-	bindings := append([]binding{
-		{"a", "ADDRESS"},
-		{"max-upload-size", "MAX_UPLOAD_SIZE"},
-		{"web-dir", "WEB_DIR"},
-	}, commonBindings...)
-	if err := parse(fs, args, bindings); err != nil {
+	if err := parse(fs, args, append(serverBindings, commonBindings...)); err != nil {
 		return Server{}, err
 	}
 	if err := cfg.validate(); err != nil {
@@ -85,11 +91,7 @@ func LoadWorker(args []string) (Worker, error) {
 	registerCommon(fs, &cfg.Common)
 	fs.IntVar(&cfg.Prefetch, "prefetch", 10, "messages taken from the broker at once (env WORKER_PREFETCH)")
 	fs.IntVar(&cfg.MaxRetries, "max-retries", 5, "processing attempts per message (env WORKER_MAX_RETRIES)")
-	bindings := append([]binding{
-		{"prefetch", "WORKER_PREFETCH"},
-		{"max-retries", "WORKER_MAX_RETRIES"},
-	}, commonBindings...)
-	if err := parse(fs, args, bindings); err != nil {
+	if err := parse(fs, args, append(workerBindings, commonBindings...)); err != nil {
 		return Worker{}, err
 	}
 	if err := cfg.validate(); err != nil {

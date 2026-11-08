@@ -345,3 +345,9 @@ func TestEscapedUserIDInPath(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "go/pher@example.com", svc.opened.user)
 }
+
+func TestLiteralPercentInPathDecodedOnce(t *testing.T) {
+	svc := &fakeService{}
+	serve(svc, httptest.NewRequest(http.MethodGet, "/api/v1/users/a%2541/avatar", nil))
+	assert.Equal(t, "a%41", svc.opened.user)
+}

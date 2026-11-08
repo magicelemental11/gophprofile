@@ -24,7 +24,7 @@
       <main class="p-6 space-y-6">
         <div id="errorMessage" class="{{if not .Error}}hidden {{end}}bg-red-500/20 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg">{{.Error}}</div>
 
-        <section id="uploadView" class="hidden">
+        <section id="uploadView">
           <form id="uploadForm" method="post" action="/web/upload" enctype="multipart/form-data" class="space-y-4">
             <div>
               <label for="userId" class="block text-sm font-medium text-white mb-2">

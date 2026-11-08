@@ -17,11 +17,10 @@ var requiredArgs = []string{
 }
 
 func TestMain(m *testing.M) {
-	for _, b := range commonBindings {
-		_ = os.Unsetenv(b.env)
-	}
-	for _, env := range []string{"ADDRESS", "MAX_UPLOAD_SIZE", "WEB_DIR", "WORKER_PREFETCH", "WORKER_MAX_RETRIES"} {
-		_ = os.Unsetenv(env)
+	for _, bs := range [][]binding{commonBindings, serverBindings, workerBindings} {
+		for _, b := range bs {
+			_ = os.Unsetenv(b.env)
+		}
 	}
 	os.Exit(m.Run())
 }

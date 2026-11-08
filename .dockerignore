@@ -1,7 +1,5 @@
 .git
 .scratch
-.playwright-mcp
-CLAUDE.md
 coverage*
 *.out
 node_modules
