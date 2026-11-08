@@ -60,7 +60,7 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 	a, err := s.repo.Create(ctx, domain.Avatar{
 		ID:        id,
 		UserID:    userID,
-		FileName:  fileName,
+		FileName:  domain.CleanFileName(fileName),
 		MimeType:  info.Format.MIME(),
 		SizeBytes: int64(len(data)),
 		Width:     info.Width,

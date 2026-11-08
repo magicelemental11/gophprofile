@@ -13,11 +13,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
+
+	"github.com/magicelemental11/gophprofile/internal/domain"
 )
 
 const maxUserIDField = 1 << 10
 
-var errNoUser = errors.New("missing user id field")
+var (
+	errNoUser      = errors.New("missing user id field")
+	errInvalidUser = errors.New("invalid user id")
+)
 
 // Web holds the web interface: the page template and the static assets.
 type Web struct {
@@ -51,13 +56,13 @@ type webHandler struct {
 	web *Web
 }
 
-func (h *webHandler) mount(r chi.Router) {
+func (h *webHandler) mount(r chi.Router, uploadLimit func(http.Handler) http.Handler) {
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/web/upload", http.StatusFound)
 	})
 	r.Get("/web/upload", h.index)
 	r.Get("/web/gallery/{user_id}", h.index)
-	r.Post("/web/upload", h.upload)
+	r.With(uploadLimit).Post("/web/upload", h.upload)
 	r.Handle("/web/static/*", h.web.static)
 }
 
@@ -70,6 +75,8 @@ func (h *webHandler) upload(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errNoUser):
 		h.render(w, http.StatusBadRequest, pageData{Error: "Missing user ID"})
+	case errors.Is(err, errInvalidUser):
+		h.render(w, http.StatusBadRequest, pageData{UserID: uid, Error: "Invalid user ID"})
 	case err != nil:
 		h.failPage(w, uid, err)
 	default:
@@ -107,6 +114,9 @@ func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request) (string
 			defer part.Close()
 			if uid == "" {
 				return "", errNoUser
+			}
+			if !domain.ValidUserID(uid) {
+				return uid, errInvalidUser
 			}
 			_, err := h.svc.Upload(r.Context(), uid, part.FileName(), part)
 			return uid, err

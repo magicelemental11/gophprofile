@@ -72,6 +72,11 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 		Health:  map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
 		Avatars: service.NewAvatarService(repo, store, broker, lg, cfg.MaxUploadSize),
 		Web:     web,
+		Security: handlers.Security{
+			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
+			APIRateLimit:       cfg.RateLimitRPS,
+			UploadRateLimit:    cfg.UploadRateLimit,
+		},
 	})
 	srv := &http.Server{
 		Addr:              cfg.Address,

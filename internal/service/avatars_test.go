@@ -68,6 +68,14 @@ func TestUploadRejects(t *testing.T) {
 	assert.Empty(t, e.pub.events)
 }
 
+func TestUploadCleansFileName(t *testing.T) {
+	e := newEnv()
+	a, err := e.svc.Upload(context.Background(), "u", `..\..\secret\cat.png`, bytes.NewReader(pngBytes(t, 10, 10)))
+	require.NoError(t, err)
+	assert.Equal(t, "cat.png", a.FileName)
+	assert.Equal(t, "cat.png", e.repo.avatars[a.ID].FileName)
+}
+
 func TestUploadStorageFailure(t *testing.T) {
 	e := newEnv()
 	e.store.putFails = 1

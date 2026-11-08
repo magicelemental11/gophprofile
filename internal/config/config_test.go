@@ -36,6 +36,19 @@ func TestLoadServerDefaults(t *testing.T) {
 	assert.Equal(t, "info", cfg.LogLevel)
 	assert.Equal(t, "postgres://localhost/db", cfg.DatabaseDSN)
 	assert.Equal(t, "amqp://localhost", cfg.AMQPURL)
+	assert.Empty(t, cfg.CORSAllowedOrigins)
+	assert.Equal(t, 100, cfg.RateLimitRPS)
+	assert.Equal(t, 10, cfg.UploadRateLimit)
+}
+
+func TestLoadServerSecurity(t *testing.T) {
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://a.example, https://b.example,")
+	t.Setenv("RATE_LIMIT_RPS", "50")
+	cfg, err := LoadServer(append([]string{"-upload-rate-limit", "0"}, requiredArgs...))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://a.example", "https://b.example"}, cfg.CORSAllowedOrigins)
+	assert.Equal(t, 50, cfg.RateLimitRPS)
+	assert.Equal(t, 0, cfg.UploadRateLimit)
 }
 
 func TestLoadServerEnv(t *testing.T) {
@@ -75,6 +88,8 @@ func TestLoadServerErrors(t *testing.T) {
 		"bad int env":  {args: requiredArgs, env: map[string]string{"MAX_UPLOAD_SIZE": "big"}},
 		"bad size":     {args: append([]string{"-max-upload-size", "0"}, requiredArgs...)},
 		"unknown flag": {args: []string{"-nope"}},
+		"negative rps": {args: append([]string{"-rate-limit-rps", "-1"}, requiredArgs...)},
+		"neg uploads":  {args: append([]string{"-upload-rate-limit", "-1"}, requiredArgs...)},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

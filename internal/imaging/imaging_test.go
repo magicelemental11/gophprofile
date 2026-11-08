@@ -2,6 +2,8 @@ package imaging
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/gif"
@@ -63,6 +65,39 @@ func TestInspectRejects(t *testing.T) {
 	} {
 		_, err := Inspect(data)
 		assert.ErrorIs(t, err, domain.ErrInvalidFormat, name)
+	}
+}
+
+func pngHeader(w, h uint32) []byte {
+	b := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR")
+	b = binary.BigEndian.AppendUint32(b, w)
+	b = binary.BigEndian.AppendUint32(b, h)
+	b = append(b, 8, 6, 0, 0, 0)
+	return binary.BigEndian.AppendUint32(b, crc32.ChecksumIEEE(b[12:]))
+}
+
+func TestInspectRejectsHugeDimensions(t *testing.T) {
+	for _, dims := range [][2]uint32{{MaxSide + 1, 10}, {10, MaxSide + 1}, {100000, 100000}} {
+		_, err := Inspect(pngHeader(dims[0], dims[1]))
+		assert.ErrorIs(t, err, domain.ErrInvalidFormat, dims)
+		assert.ErrorContains(t, err, "too large", dims)
+	}
+}
+
+func TestInspectRejectsBrokenBody(t *testing.T) {
+	for _, f := range []string{"jpeg", "png", "webp"} {
+		data := encoded(t, f, 200, 200)
+		_, err := Inspect(data[:len(data)/2])
+		assert.ErrorIs(t, err, domain.ErrInvalidFormat, "truncated %s", f)
+	}
+}
+
+func TestInspectRejectsTrailingData(t *testing.T) {
+	zip := []byte("PK\x03\x04 polyglot payload <script>alert(1)</script>")
+	for _, f := range []string{"png", "webp"} {
+		data := append(encoded(t, f, 20, 20), zip...)
+		_, err := Inspect(data)
+		assert.ErrorIs(t, err, domain.ErrInvalidFormat, f)
 	}
 }
 

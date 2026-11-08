@@ -14,31 +14,45 @@ const requestTimeout = 30 * time.Second
 
 // Deps holds what the router needs to serve requests.
 type Deps struct {
-	Logger  *zap.Logger
-	Health  map[string]Pinger
-	Avatars AvatarService
-	Web     *Web
+	Logger   *zap.Logger
+	Health   map[string]Pinger
+	Avatars  AvatarService
+	Web      *Web
+	Security Security
 }
 
 // NewRouter builds the HTTP handler with all routes and middleware.
 func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, logRequests(d.Logger), middleware.Recoverer, middleware.Timeout(requestTimeout))
+	r.Use(
+		middleware.RequestID,
+		middleware.ClientIPFromRemoteAddr,
+		logRequests(d.Logger),
+		middleware.Recoverer,
+		middleware.Timeout(requestTimeout),
+		noSniff,
+		corsHandler(d.Security.CORSAllowedOrigins),
+	)
 
 	r.Get("/health", health(d.Health, healthTimeout))
 
 	h := &api{svc: d.Avatars, log: d.Logger}
+	uploadLimit := rateLimit(d.Security.UploadRateLimit, time.Minute)
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Post("/avatars", h.upload)
+		r.Use(rateLimit(d.Security.APIRateLimit, time.Second))
+		r.With(uploadLimit).Post("/avatars", h.upload)
 		r.Get("/avatars/{id}", h.image)
 		r.Delete("/avatars/{id}", h.delete)
 		r.Get("/avatars/{id}/metadata", h.metadata)
-		r.Get("/users/{user_id}/avatar", h.userImage)
-		r.Delete("/users/{user_id}/avatar", h.deleteCurrent)
-		r.Get("/users/{user_id}/avatars", h.list)
+		r.Route("/users/{user_id}", func(r chi.Router) {
+			r.Use(validUserPath)
+			r.Get("/avatar", h.userImage)
+			r.Delete("/avatar", h.deleteCurrent)
+			r.Get("/avatars", h.list)
+		})
 	})
 	if d.Web != nil {
-		(&webHandler{api: h, web: d.Web}).mount(r)
+		(&webHandler{api: h, web: d.Web}).mount(r, uploadLimit)
 	}
 	return r
 }

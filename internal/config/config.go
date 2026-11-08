@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // S3 holds the object storage settings.
@@ -31,6 +32,12 @@ type Server struct {
 	Address       string
 	MaxUploadSize int64
 	WebDir        string
+	// CORSAllowedOrigins may call every endpoint from a browser; images are open to any origin.
+	CORSAllowedOrigins []string
+	// RateLimitRPS limits API requests per second from one IP; zero disables the limit.
+	RateLimitRPS int
+	// UploadRateLimit limits uploads per minute from one IP; zero disables the limit.
+	UploadRateLimit int
 }
 
 // Worker holds the background worker settings.
@@ -57,6 +64,9 @@ var serverBindings = []binding{
 	{"a", "ADDRESS"},
 	{"max-upload-size", "MAX_UPLOAD_SIZE"},
 	{"web-dir", "WEB_DIR"},
+	{"cors-allowed-origins", "CORS_ALLOWED_ORIGINS"},
+	{"rate-limit-rps", "RATE_LIMIT_RPS"},
+	{"upload-rate-limit", "UPLOAD_RATE_LIMIT"},
 }
 
 var workerBindings = []binding{
@@ -72,6 +82,12 @@ func LoadServer(args []string) (Server, error) {
 	fs.StringVar(&cfg.Address, "a", ":8080", "listen address (env ADDRESS)")
 	fs.Int64Var(&cfg.MaxUploadSize, "max-upload-size", 10<<20, "maximum upload size in bytes (env MAX_UPLOAD_SIZE)")
 	fs.StringVar(&cfg.WebDir, "web-dir", "./web", "web interface directory (env WEB_DIR)")
+	fs.Func("cors-allowed-origins", "comma-separated origins allowed to call the API, * for any (env CORS_ALLOWED_ORIGINS)", func(v string) error {
+		cfg.CORSAllowedOrigins = splitList(v)
+		return nil
+	})
+	fs.IntVar(&cfg.RateLimitRPS, "rate-limit-rps", 100, "API requests per second from one IP, 0 disables (env RATE_LIMIT_RPS)")
+	fs.IntVar(&cfg.UploadRateLimit, "upload-rate-limit", 10, "uploads per minute from one IP, 0 disables (env UPLOAD_RATE_LIMIT)")
 	if err := parse(fs, args, append(serverBindings, commonBindings...)); err != nil {
 		return Server{}, err
 	}
@@ -80,6 +96,9 @@ func LoadServer(args []string) (Server, error) {
 	}
 	if cfg.MaxUploadSize <= 0 {
 		return Server{}, errors.New("max upload size must be positive")
+	}
+	if cfg.RateLimitRPS < 0 || cfg.UploadRateLimit < 0 {
+		return Server{}, errors.New("rate limits must not be negative")
 	}
 	return cfg, nil
 }
@@ -101,6 +120,16 @@ func LoadWorker(args []string) (Worker, error) {
 		return Worker{}, errors.New("prefetch and max retries must be positive")
 	}
 	return cfg, nil
+}
+
+func splitList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func registerCommon(fs *flag.FlagSet, c *Common) {

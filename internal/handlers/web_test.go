@@ -86,9 +86,9 @@ func TestWebUploadRedirectsToGallery(t *testing.T) {
 }
 
 func TestWebUploadEscapesUserInLocation(t *testing.T) {
-	rec := serveWeb(t, &fakeService{}, webUploadRequest(t, "a/b c", []byte("x")))
+	rec := serveWeb(t, &fakeService{}, webUploadRequest(t, "50%+off@example.com", []byte("x")))
 	require.Equal(t, http.StatusSeeOther, rec.Code)
-	assert.Equal(t, "/web/gallery/a%2Fb%20c", rec.Header().Get("Location"))
+	assert.Equal(t, "/web/gallery/50%25+off@example.com", rec.Header().Get("Location"))
 }
 
 func TestWebUploadErrors(t *testing.T) {

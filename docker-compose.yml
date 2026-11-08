@@ -12,6 +12,9 @@ x-app: &app
     S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-gopher-secret}
     S3_BUCKET: ${S3_BUCKET:-avatars}
     LOG_LEVEL: ${LOG_LEVEL:-info}
+    CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080}
+    RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
+    UPLOAD_RATE_LIMIT: ${UPLOAD_RATE_LIMIT:-10}
   depends_on:
     postgres:
       condition: service_healthy

@@ -3,6 +3,7 @@ package imaging
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -26,8 +27,12 @@ type Info struct {
 	Height int
 }
 
-// Inspect detects the format from the magic bytes and reads the dimensions.
-// Anything other than JPEG, PNG or WebP is domain.ErrInvalidFormat.
+// MaxSide is the largest accepted image width or height in pixels.
+const MaxSide = 8000
+
+// Inspect detects the format from the magic bytes, checks the dimensions before decoding
+// and then decodes the whole image, rejecting truncated files and data appended after the image.
+// Anything other than a valid JPEG, PNG or WebP is domain.ErrInvalidFormat.
 func Inspect(data []byte) (Info, error) {
 	f, ok := domain.FormatFromMIME(http.DetectContentType(data))
 	if !ok {
@@ -37,7 +42,27 @@ func Inspect(data []byte) (Info, error) {
 	if err != nil {
 		return Info{}, fmt.Errorf("%w: %w", domain.ErrInvalidFormat, err)
 	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > MaxSide || cfg.Height > MaxSide {
+		return Info{}, fmt.Errorf("%w: image %dx%d too large, max %dx%d", domain.ErrInvalidFormat, cfg.Width, cfg.Height, MaxSide, MaxSide)
+	}
+	r := bytes.NewReader(data)
+	if _, err := Decode(r, f); err != nil {
+		return Info{}, err
+	}
+	if hasTrailingData(data, r, f) {
+		return Info{}, fmt.Errorf("%w: data after the end of the image", domain.ErrInvalidFormat)
+	}
 	return Info{Format: f, Width: cfg.Width, Height: cfg.Height}, nil
+}
+
+func hasTrailingData(data []byte, rest *bytes.Reader, f domain.Format) bool {
+	switch f {
+	case domain.FormatPNG:
+		return rest.Len() > 0
+	case domain.FormatWebP:
+		return len(data) < 8 || uint64(binary.LittleEndian.Uint32(data[4:8]))+8 != uint64(len(data))
+	}
+	return false
 }
 
 func decodeConfig(r io.Reader, f domain.Format) (image.Config, error) {

@@ -114,6 +114,10 @@ func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {
 		writeError(w, http.StatusBadRequest, "Missing X-User-ID header", "")
 		return "", false
 	}
+	if !domain.ValidUserID(uid) {
+		writeError(w, http.StatusBadRequest, "Invalid user id", "")
+		return "", false
+	}
 	return uid, true
 }
 
@@ -196,6 +200,7 @@ func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
 	img, err := h.svc.OpenLatest(r.Context(), pathParam(r, "user_id"), size, format)
 	if errors.Is(err, domain.ErrNotFound) {
 		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Disposition", "inline")
 		w.Header().Set("Cache-Control", "public, max-age=300")
 		_, _ = w.Write(placeholder)
 		return
@@ -216,6 +221,7 @@ func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Imag
 		return
 	}
 	w.Header().Set("Content-Type", img.ContentType)
+	w.Header().Set("Content-Disposition", "inline")
 	if _, err := io.Copy(w, img.Body); err != nil {
 		h.log.Warn("send image", zap.Error(err))
 	}
