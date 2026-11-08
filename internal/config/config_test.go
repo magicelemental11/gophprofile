@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +14,16 @@ var requiredArgs = []string{
 	"-s3-access-key", "key",
 	"-s3-secret-key", "secret",
 	"-amqp", "amqp://localhost",
+}
+
+func TestMain(m *testing.M) {
+	for _, b := range commonBindings {
+		_ = os.Unsetenv(b.env)
+	}
+	for _, env := range []string{"ADDRESS", "MAX_UPLOAD_SIZE", "WEB_DIR", "WORKER_PREFETCH", "WORKER_MAX_RETRIES"} {
+		_ = os.Unsetenv(env)
+	}
+	os.Exit(m.Run())
 }
 
 func TestLoadServerDefaults(t *testing.T) {

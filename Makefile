@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: build run-server run-worker up down test test-integration cover lint clean
+.PHONY: build run-server run-worker docker-build up up-deps down logs test test-integration cover lint clean
 
 build:
 	go build -o bin/server ./cmd/server
@@ -15,11 +15,20 @@ run-server:
 run-worker:
 	go run ./cmd/worker
 
+docker-build:
+	docker compose build
+
 up:
-	docker compose up -d
+	docker compose up -d --build
+
+up-deps:
+	docker compose up -d postgres rabbitmq minio
 
 down:
 	docker compose down
+
+logs:
+	docker compose logs -f server worker
 
 test:
 	go test -race ./...

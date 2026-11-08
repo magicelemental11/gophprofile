@@ -2,11 +2,20 @@
 
 Сервис аватарок пользователей: загрузка, хранение, обработка и раздача изображений через REST API.
 
+## Запуск в Docker
+
+```sh
+cp .env.example .env
+docker compose up --build -d   # или make up
+```
+
+Поднимаются server (`http://localhost:8080`), worker, PostgreSQL, RabbitMQ (management — `http://localhost:15672`) и MinIO (консоль — `http://localhost:9001`). Server и worker собираются в один образ из `docker/Dockerfile`. При потере соединения с RabbitMQ оба процесса завершаются, и Compose перезапускает их. Логи — `make logs`.
+
 ## Запуск для разработки
 
 ```sh
 cp .env.example .env
-make up            # PostgreSQL, RabbitMQ, MinIO
+make up-deps       # PostgreSQL, RabbitMQ, MinIO
 make run-server    # миграции применяются при старте
 make run-worker
 ```

@@ -78,13 +78,17 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	closed := broker.NotifyClose()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	lg.Info("server started", zap.String("address", cfg.Address))
 
+	var runErr error
 	select {
 	case err := <-errCh:
 		return err
+	case amqpErr := <-closed:
+		runErr = fmt.Errorf("broker connection lost: %w", amqpErr)
 	case <-ctx.Done():
 	}
 	lg.Info("shutting down")
@@ -96,5 +100,5 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
-	return nil
+	return runErr
 }
