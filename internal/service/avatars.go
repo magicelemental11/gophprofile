@@ -15,11 +15,12 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/imaging"
 )
 
-// Image is an avatar file ready to be sent to a client.
+// Image is an avatar variant ready to be sent to a client. ContentType and ETag come from
+// metadata, so a client cache can be validated before Open reads the file.
 type Image struct {
-	Body        io.ReadCloser
 	ContentType string
 	ETag        string
+	Open        func(ctx context.Context) (io.ReadCloser, error)
 }
 
 // AvatarService implements uploading, reading and deleting avatars.
@@ -111,7 +112,7 @@ func (s *AvatarService) Open(ctx context.Context, id string, size domain.Size, f
 	if err != nil {
 		return Image{}, err
 	}
-	return s.open(ctx, a, size, format)
+	return s.open(a, size, format)
 }
 
 // OpenLatest is Open for the user's current avatar.
@@ -120,10 +121,10 @@ func (s *AvatarService) OpenLatest(ctx context.Context, userID string, size doma
 	if err != nil {
 		return Image{}, err
 	}
-	return s.open(ctx, a, size, format)
+	return s.open(a, size, format)
 }
 
-func (s *AvatarService) open(ctx context.Context, a domain.Avatar, size domain.Size, format domain.Format) (Image, error) {
+func (s *AvatarService) open(a domain.Avatar, size domain.Size, format domain.Format) (Image, error) {
 	if a.UploadStatus != domain.UploadUploaded {
 		return Image{}, domain.ErrNotFound
 	}
@@ -143,25 +144,41 @@ func (s *AvatarService) open(ctx context.Context, a domain.Avatar, size domain.S
 		}
 	}
 	etag := `"` + strings.Trim(a.ETag, `"`) + "-" + string(size) + "-" + string(format) + `"`
+	v := variant{key: key, src: srcFormat, size: size, format: format, resize: resize}
+	return Image{
+		ContentType: format.MIME(),
+		ETag:        etag,
+		Open:        func(ctx context.Context) (io.ReadCloser, error) { return s.read(ctx, v) },
+	}, nil
+}
 
-	body, err := s.store.Get(ctx, key)
+type variant struct {
+	key    string
+	src    domain.Format
+	size   domain.Size
+	format domain.Format
+	resize bool
+}
+
+func (s *AvatarService) read(ctx context.Context, v variant) (io.ReadCloser, error) {
+	body, err := s.store.Get(ctx, v.key)
 	if err != nil {
-		return Image{}, err
+		return nil, err
 	}
-	if !resize && format == srcFormat {
-		return Image{Body: body, ContentType: format.MIME(), ETag: etag}, nil
+	if !v.resize && v.format == v.src {
+		return body, nil
 	}
 	defer body.Close()
 
-	img, err := imaging.Decode(body, srcFormat)
+	img, err := imaging.Decode(body, v.src)
 	if err != nil {
-		return Image{}, fmt.Errorf("decode %s: %w", key, err)
+		return nil, fmt.Errorf("decode %s: %w", v.key, err)
 	}
 	var buf bytes.Buffer
-	if err := imaging.Encode(&buf, imaging.Thumbnail(img, size), format); err != nil {
-		return Image{}, fmt.Errorf("encode %s: %w", key, err)
+	if err := imaging.Encode(&buf, imaging.Thumbnail(img, v.size), v.format); err != nil {
+		return nil, fmt.Errorf("encode %s: %w", v.key, err)
 	}
-	return Image{Body: io.NopCloser(&buf), ContentType: format.MIME(), ETag: etag}, nil
+	return io.NopCloser(&buf), nil
 }
 
 // Delete soft-deletes the avatar if it belongs to the requester and asks the worker to remove its files.

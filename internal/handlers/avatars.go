@@ -213,18 +213,46 @@ func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Image) {
-	defer img.Body.Close()
-	w.Header().Set("ETag", img.ETag)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	if r.Header.Get("If-None-Match") == img.ETag {
+	if etagMatches(r.Header.Get("If-None-Match"), img.ETag) {
+		setCacheHeaders(w, img)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	w.Header().Set("Content-Type", img.ContentType)
-	w.Header().Set("Content-Disposition", "inline")
-	if _, err := io.Copy(w, img.Body); err != nil {
+	if r.Method == http.MethodHead {
+		setImageHeaders(w, img)
+		return
+	}
+	body, err := img.Open(r.Context())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	defer body.Close()
+	setImageHeaders(w, img)
+	if _, err := io.Copy(w, body); err != nil {
 		h.log.Warn("send image", zap.Error(err))
 	}
+}
+
+func setCacheHeaders(w http.ResponseWriter, img service.Image) {
+	w.Header().Set("ETag", img.ETag)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+}
+
+func setImageHeaders(w http.ResponseWriter, img service.Image) {
+	setCacheHeaders(w, img)
+	w.Header().Set("Content-Type", img.ContentType)
+	w.Header().Set("Content-Disposition", "inline")
+}
+
+func etagMatches(header, etag string) bool {
+	for _, tag := range strings.Split(header, ",") {
+		tag = strings.TrimSpace(tag)
+		if tag == "*" || (tag != "" && strings.TrimPrefix(tag, "W/") == etag) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *api) metadata(w http.ResponseWriter, r *http.Request) {

@@ -97,7 +97,7 @@ curl -i -F file=@cat.png -H 'X-User-ID: gopher@example.com' http://localhost:808
 # 413 {"error":"File too large","max_size":10485760}
 ```
 
-Картинка по id, с выбором размера и формата (по умолчанию — оригинал в исходном формате; ответы с `ETag`, поддерживается `If-None-Match` → 304):
+Картинка по id, с выбором размера и формата (по умолчанию — оригинал в исходном формате; ответы с `ETag`, поддерживаются `If-None-Match` → 304 без чтения файла и `HEAD`):
 
 ```sh
 curl -o avatar.png http://localhost:8080/api/v1/avatars/{id}

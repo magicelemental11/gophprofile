@@ -116,8 +116,10 @@ func (errReader) Read([]byte) (int, error) { return 0, errBoom }
 
 func readImage(t *testing.T, img Image) imaging.Info {
 	t.Helper()
-	defer img.Body.Close()
-	data, err := io.ReadAll(img.Body)
+	body, err := img.Open(context.Background())
+	require.NoError(t, err)
+	defer body.Close()
+	data, err := io.ReadAll(body)
 	require.NoError(t, err)
 	info, err := imaging.Inspect(data)
 	require.NoError(t, err)
@@ -185,8 +187,18 @@ func TestOpenErrors(t *testing.T) {
 
 	a := e.upload(t, "u")
 	e.store.getErr = errBoom
-	_, err = e.svc.Open(context.Background(), a.ID, domain.Size100, "")
+	img, err := e.svc.Open(context.Background(), a.ID, domain.Size100, "")
+	require.NoError(t, err, "metadata is enough to describe the image")
+	assert.Equal(t, "image/jpeg", img.ContentType)
+	_, err = img.Open(context.Background())
 	assert.ErrorIs(t, err, errBoom)
+
+	e.store.getErr = nil
+	e.store.objects[a.S3Key] = []byte("broken")
+	img, err = e.svc.Open(context.Background(), a.ID, domain.Size100, "")
+	require.NoError(t, err)
+	_, err = img.Open(context.Background())
+	assert.ErrorIs(t, err, domain.ErrInvalidFormat)
 }
 
 func TestOpenLatestGetList(t *testing.T) {

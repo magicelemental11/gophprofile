@@ -30,6 +30,7 @@ func NewRouter(d Deps) http.Handler {
 		logRequests(d.Logger),
 		middleware.Recoverer,
 		middleware.Timeout(requestTimeout),
+		middleware.GetHead,
 		noSniff,
 		corsHandler(d.Security.CORSAllowedOrigins),
 	)

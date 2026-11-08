@@ -33,6 +33,8 @@ type fakeService struct {
 	uploadName string
 	avatars    map[string]domain.Avatar
 	openErr    error
+	readErr    error
+	reads      int
 	deleteErr  error
 	deleted    struct{ requester, id, user string }
 	opened     struct {
@@ -78,7 +80,13 @@ func (f *fakeService) image() (service.Image, error) {
 	if f.openErr != nil {
 		return service.Image{}, f.openErr
 	}
-	return service.Image{Body: io.NopCloser(strings.NewReader("IMG")), ContentType: "image/png", ETag: `"e1"`}, nil
+	return service.Image{ContentType: "image/png", ETag: `"e1"`, Open: func(context.Context) (io.ReadCloser, error) {
+		f.reads++
+		if f.readErr != nil {
+			return nil, f.readErr
+		}
+		return io.NopCloser(strings.NewReader("IMG")), nil
+	}}, nil
 }
 
 func (f *fakeService) Open(_ context.Context, id string, size domain.Size, format domain.Format) (service.Image, error) {
@@ -204,11 +212,42 @@ func TestGetAvatarImage(t *testing.T) {
 }
 
 func TestGetAvatarNotModified(t *testing.T) {
+	for _, header := range []string{`"e1"`, `W/"e1"`, `"x", "e1"`, `*`} {
+		svc := &fakeService{}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/avatars/a1", nil)
+		req.Header.Set("If-None-Match", header)
+		rec := serve(svc, req)
+		assert.Equal(t, http.StatusNotModified, rec.Code, header)
+		assert.Empty(t, rec.Body.String())
+		assert.Equal(t, `"e1"`, rec.Header().Get("ETag"))
+		assert.Zero(t, svc.reads, "a cached image is not read")
+	}
+
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/avatars/a1", nil)
-	req.Header.Set("If-None-Match", `"e1"`)
+	req.Header.Set("If-None-Match", `"x", W/"e2"`)
 	rec := serve(&fakeService{}, req)
-	assert.Equal(t, http.StatusNotModified, rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHeadAvatar(t *testing.T) {
+	svc := &fakeService{}
+	rec := serve(svc, httptest.NewRequest(http.MethodHead, "/api/v1/avatars/a1", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "image/png", rec.Header().Get("Content-Type"))
+	assert.Equal(t, `"e1"`, rec.Header().Get("ETag"))
 	assert.Empty(t, rec.Body.String())
+	assert.Zero(t, svc.reads)
+
+	rec = serve(&fakeService{openErr: domain.ErrNotFound}, httptest.NewRequest(http.MethodHead, "/api/v1/users/nobody/avatar", nil))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "image/png", rec.Header().Get("Content-Type"))
+}
+
+func TestGetAvatarReadError(t *testing.T) {
+	rec := serve(&fakeService{readErr: domain.ErrNotFound}, httptest.NewRequest(http.MethodGet, "/api/v1/avatars/a1", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Empty(t, rec.Header().Get("ETag"))
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
 func TestGetAvatarErrors(t *testing.T) {
