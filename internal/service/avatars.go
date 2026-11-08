@@ -157,3 +157,39 @@ func (s *AvatarService) open(ctx context.Context, a domain.Avatar, size domain.S
 	}
 	return Image{Body: io.NopCloser(&buf), ContentType: format.MIME(), ETag: etag}, nil
 }
+
+// Delete soft-deletes the avatar if it belongs to the requester and asks the worker to remove its files.
+// A failed publish is logged but does not fail the deletion: the files are then left orphaned.
+func (s *AvatarService) Delete(ctx context.Context, requesterID, avatarID string) error {
+	a, err := s.repo.Get(ctx, avatarID)
+	if err != nil {
+		return err
+	}
+	return s.delete(ctx, requesterID, a)
+}
+
+// DeleteCurrent is Delete for the user's current avatar.
+func (s *AvatarService) DeleteCurrent(ctx context.Context, requesterID, userID string) error {
+	if requesterID != userID {
+		return domain.ErrForbidden
+	}
+	a, err := s.repo.GetLatestByUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	return s.delete(ctx, requesterID, a)
+}
+
+func (s *AvatarService) delete(ctx context.Context, requesterID string, a domain.Avatar) error {
+	if a.UserID != requesterID {
+		return domain.ErrForbidden
+	}
+	if err := s.repo.SoftDelete(ctx, a.ID); err != nil {
+		return err
+	}
+	event := domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}
+	if err := s.pub.Publish(ctx, domain.RoutingDeleted, event); err != nil {
+		s.log.Error("publish delete event", zap.String("avatar_id", a.ID), zap.Error(err))
+	}
+	return nil
+}

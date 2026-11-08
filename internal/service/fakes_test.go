@@ -132,9 +132,6 @@ func (r *fakeRepo) SetProcessingStatus(_ context.Context, id string, s domain.Pr
 func (r *fakeRepo) CompleteProcessing(_ context.Context, id string, keys map[domain.Size]string, messageID string) (bool, error) {
 	err := r.update(id, func(a *domain.Avatar) { a.ProcessingStatus, a.ThumbnailKeys = domain.ProcessingCompleted, keys })
 	if errors.Is(err, domain.ErrNotFound) {
-		r.mu.Lock()
-		r.processed[messageID] = true
-		r.mu.Unlock()
 		return false, nil
 	}
 	if err != nil {

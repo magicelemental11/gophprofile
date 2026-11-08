@@ -22,6 +22,7 @@ type fakeProcessor struct {
 	errs    []error
 	calls   int
 	got     []domain.AvatarProcessEvent
+	deleted []domain.AvatarDeleteEvent
 	failed  []string
 	msgIDs  []string
 	failErr error
@@ -31,6 +32,17 @@ func (f *fakeProcessor) Process(_ context.Context, messageID string, ev domain.A
 	f.calls++
 	f.got = append(f.got, ev)
 	f.msgIDs = append(f.msgIDs, messageID)
+	return f.next()
+}
+
+func (f *fakeProcessor) DeleteFiles(_ context.Context, messageID string, ev domain.AvatarDeleteEvent) error {
+	f.calls++
+	f.deleted = append(f.deleted, ev)
+	f.msgIDs = append(f.msgIDs, messageID)
+	return f.next()
+}
+
+func (f *fakeProcessor) next() error {
 	if len(f.errs) == 0 {
 		return nil
 	}
@@ -91,6 +103,28 @@ func TestHandleProcess(t *testing.T) {
 	assert.Equal(t, []domain.AvatarProcessEvent{ev}, p.got)
 }
 
+func TestHandleDeleted(t *testing.T) {
+	p := &fakeProcessor{errs: []error{errTemporary, nil}}
+	w, sleeps := newTestWorker(p, 5)
+	ev := domain.AvatarDeleteEvent{AvatarID: "a1", S3Keys: []string{"originals/a1.png", "thumbnails/a1/100x100.jpg"}}
+
+	require.NoError(t, w.Handle(context.Background(), Message{ID: "m", RoutingKey: domain.RoutingDeleted, Body: body(t, ev)}))
+	assert.Equal(t, []domain.AvatarDeleteEvent{ev, ev}, p.deleted)
+	assert.Equal(t, []string{"m", "m"}, p.msgIDs)
+	assert.Equal(t, []time.Duration{500 * time.Millisecond}, sleeps.delays)
+	assert.Empty(t, p.got)
+}
+
+func TestHandleDeletedGivesUpWithoutMarkFailed(t *testing.T) {
+	p := &fakeProcessor{errs: []error{errTemporary, errTemporary}}
+	w, _ := newTestWorker(p, 2)
+
+	err := w.Handle(context.Background(), Message{ID: "m", RoutingKey: domain.RoutingDeleted, Body: body(t, domain.AvatarDeleteEvent{AvatarID: "a1"})})
+	require.ErrorIs(t, err, errTemporary)
+	assert.Equal(t, 2, p.calls)
+	assert.Empty(t, p.failed)
+}
+
 func TestHandleRetriesWithBackoff(t *testing.T) {
 	p := &fakeProcessor{errs: []error{errTemporary, errTemporary, nil}}
 	w, sleeps := newTestWorker(p, 5)
@@ -130,6 +164,7 @@ func TestHandleBadMessages(t *testing.T) {
 
 	assert.ErrorIs(t, w.Handle(context.Background(), Message{RoutingKey: domain.RoutingUploaded, Body: []byte("{")}), service.ErrPermanent)
 	assert.ErrorIs(t, w.Handle(context.Background(), Message{RoutingKey: domain.RoutingProcess, Body: []byte("[]")}), service.ErrPermanent)
+	assert.ErrorIs(t, w.Handle(context.Background(), Message{RoutingKey: domain.RoutingDeleted, Body: []byte("{")}), service.ErrPermanent)
 	assert.ErrorIs(t, w.Handle(context.Background(), Message{RoutingKey: "avatar.unknown", Body: []byte("{}")}), service.ErrPermanent)
 	assert.Zero(t, p.calls)
 }

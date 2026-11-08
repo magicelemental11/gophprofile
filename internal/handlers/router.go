@@ -30,8 +30,10 @@ func NewRouter(d Deps) http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/avatars", h.upload)
 		r.Get("/avatars/{id}", h.image)
+		r.Delete("/avatars/{id}", h.delete)
 		r.Get("/avatars/{id}/metadata", h.metadata)
 		r.Get("/users/{user_id}/avatar", h.userImage)
+		r.Delete("/users/{user_id}/avatar", h.deleteCurrent)
 		r.Get("/users/{user_id}/avatars", h.list)
 	})
 	return r

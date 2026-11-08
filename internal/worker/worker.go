@@ -29,6 +29,7 @@ type Message struct {
 // Processor does the actual work for a message.
 type Processor interface {
 	Process(ctx context.Context, messageID string, ev domain.AvatarProcessEvent) error
+	DeleteFiles(ctx context.Context, messageID string, ev domain.AvatarDeleteEvent) error
 	MarkFailed(ctx context.Context, avatarID string) error
 }
 
@@ -69,6 +70,8 @@ func (w *Worker) handle(ctx context.Context, m Message, log *zap.Logger) error {
 		if err := decode(m.Body, &ev); err != nil {
 			return err
 		}
+	case domain.RoutingDeleted:
+		return w.deleteFiles(ctx, m, log)
 	default:
 		return fmt.Errorf("%w: unknown routing key %q", service.ErrPermanent, m.RoutingKey)
 	}
@@ -81,6 +84,18 @@ func (w *Worker) handle(ctx context.Context, m Message, log *zap.Logger) error {
 		return err
 	}
 	log.Info("avatar processed", zap.String("avatar_id", ev.AvatarID))
+	return nil
+}
+
+func (w *Worker) deleteFiles(ctx context.Context, m Message, log *zap.Logger) error {
+	var ev domain.AvatarDeleteEvent
+	if err := decode(m.Body, &ev); err != nil {
+		return err
+	}
+	if err := w.retry(ctx, log, func() error { return w.proc.DeleteFiles(ctx, m.ID, ev) }); err != nil {
+		return err
+	}
+	log.Info("avatar files deleted", zap.String("avatar_id", ev.AvatarID), zap.Int("keys", len(ev.S3Keys)))
 	return nil
 }
 

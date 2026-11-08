@@ -87,7 +87,8 @@ func (r *Repository) SetProcessingStatus(ctx context.Context, id string, s domai
 }
 
 // CompleteProcessing stores thumbnail keys, marks the avatar completed and records the message
-// in one transaction. It reports false when the avatar was deleted meanwhile.
+// in one transaction. It reports false and leaves the message unrecorded when the avatar was
+// deleted meanwhile, so cleanup can be retried.
 func (r *Repository) CompleteProcessing(ctx context.Context, id string, keys map[domain.Size]string, messageID string) (bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -101,13 +102,16 @@ func (r *Repository) CompleteProcessing(ctx context.Context, id string, keys map
 	if err != nil {
 		return false, fmt.Errorf("complete processing: %w", err)
 	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO processed_messages (message_id) VALUES ($1) ON CONFLICT DO NOTHING`, messageID); err != nil {
 		return false, fmt.Errorf("record message: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("commit: %w", err)
 	}
-	return tag.RowsAffected() > 0, nil
+	return true, nil
 }
 
 // SoftDelete marks the avatar deleted.

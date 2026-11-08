@@ -69,3 +69,9 @@ func TestKeys(t *testing.T) {
 	a := Avatar{ID: "abc", S3Key: "originals/abc.png"}
 	assert.Equal(t, []string{"originals/abc.png", "thumbnails/abc/100x100.jpg", "thumbnails/abc/300x300.jpg"}, a.AllKeys())
 }
+
+func TestThumbnailKeysOf(t *testing.T) {
+	assert.Equal(t, []string{"thumbnails/a1/100x100.jpg", "thumbnails/a1/300x300.jpg"}, ThumbnailKeysOf("a1"))
+	a := Avatar{ID: "a1", S3Key: "originals/a1.png"}
+	assert.Equal(t, append([]string{"originals/a1.png"}, ThumbnailKeysOf("a1")...), a.AllKeys())
+}

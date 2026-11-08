@@ -134,6 +134,41 @@ func TestProcessDeletedMeanwhileRemovesThumbnails(t *testing.T) {
 	}
 }
 
+func TestProcessDeletedMeanwhileRetriesCleanup(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	repo := &deleteOnComplete{fakeRepo: e.repo}
+	p := NewProcessor(repo, e.store, zap.NewNop())
+	msg := uuid.NewString()
+
+	e.store.delErr = errBoom
+	require.ErrorIs(t, p.Process(context.Background(), msg, processEvent(a.ID)), errBoom)
+	assert.True(t, e.store.has(domain.ThumbnailKey(a.ID, domain.Size100)))
+
+	e.store.delErr = nil
+	require.NoError(t, p.Process(context.Background(), msg, processEvent(a.ID)), "redelivery")
+	for _, k := range domain.ThumbnailKeysOf(a.ID) {
+		assert.False(t, e.store.has(k), k)
+	}
+}
+
+func TestProcessMissingAvatarRemovesLeftoverThumbnails(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	p := newProcessor(e)
+	key := domain.ThumbnailKey(a.ID, domain.Size100)
+	_, err := e.store.Put(context.Background(), key, bytes.NewReader([]byte("x")), 1, "image/jpeg")
+	require.NoError(t, err)
+	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID))
+
+	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
+	assert.False(t, e.store.has(key))
+	assert.True(t, e.store.has(a.S3Key), "original is left to DeleteFiles")
+
+	e.store.delErr = errBoom
+	assert.ErrorIs(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), errBoom)
+}
+
 type deleteOnComplete struct {
 	*fakeRepo
 }
@@ -155,4 +190,57 @@ func TestMarkFailed(t *testing.T) {
 	assert.Equal(t, domain.StatusFailed, got.Status())
 
 	assert.NoError(t, p.MarkFailed(context.Background(), "gone"), "missing avatar is fine")
+}
+
+func TestDeleteFiles(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	p := newProcessor(e)
+	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
+	ev := domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}
+	msg := uuid.NewString()
+
+	require.NoError(t, p.DeleteFiles(context.Background(), msg, ev))
+	for _, k := range a.AllKeys() {
+		assert.False(t, e.store.has(k), k)
+	}
+	assert.True(t, e.repo.processed[msg])
+}
+
+func TestDeleteFilesIsIdempotent(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	p := newProcessor(e)
+	msg := uuid.NewString()
+	e.repo.processed[msg] = true
+	e.store.delErr = errBoom
+
+	require.NoError(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}))
+	assert.True(t, e.store.has(a.S3Key))
+}
+
+func TestDeleteFilesEmptyKeys(t *testing.T) {
+	e := newEnv()
+	p := newProcessor(e)
+	msg := uuid.NewString()
+	e.store.delErr = errBoom
+
+	require.NoError(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: "a"}))
+	assert.True(t, e.repo.processed[msg])
+}
+
+func TestDeleteFilesErrors(t *testing.T) {
+	e := newEnv()
+	p := newProcessor(e)
+	ev := domain.AvatarDeleteEvent{AvatarID: "a", S3Keys: []string{"originals/a.png"}}
+
+	assert.ErrorIs(t, p.DeleteFiles(context.Background(), "not-a-uuid", ev), ErrPermanent)
+
+	msg := uuid.NewString()
+	e.store.delErr = errBoom
+	assert.ErrorIs(t, p.DeleteFiles(context.Background(), msg, ev), errBoom)
+	assert.False(t, e.repo.processed[msg], "not marked, so a retry deletes again")
+
+	e.repo.failNext = errBoom
+	assert.ErrorIs(t, p.DeleteFiles(context.Background(), uuid.NewString(), ev), errBoom)
 }

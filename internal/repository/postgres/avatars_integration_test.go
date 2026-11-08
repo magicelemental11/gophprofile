@@ -155,9 +155,13 @@ func TestCompleteProcessing(t *testing.T) {
 	assert.True(t, ok)
 
 	require.NoError(t, r.SoftDelete(ctx, a.ID))
-	ok, err = r.CompleteProcessing(ctx, a.ID, keys, uuid.NewString())
+	deletedMsg := uuid.NewString()
+	ok, err = r.CompleteProcessing(ctx, a.ID, keys, deletedMsg)
 	require.NoError(t, err)
 	assert.False(t, ok, "deleted avatar is not updated")
+	processed, err = r.IsProcessed(ctx, deletedMsg)
+	require.NoError(t, err)
+	assert.False(t, processed, "message stays open so cleanup can be retried")
 }
 
 func TestProcessedMessages(t *testing.T) {

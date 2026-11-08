@@ -33,6 +33,8 @@ type fakeService struct {
 	uploadName string
 	avatars    map[string]domain.Avatar
 	openErr    error
+	deleteErr  error
+	deleted    struct{ requester, id, user string }
 	opened     struct {
 		id, user string
 		size     domain.Size
@@ -87,6 +89,16 @@ func (f *fakeService) Open(_ context.Context, id string, size domain.Size, forma
 func (f *fakeService) OpenLatest(_ context.Context, userID string, size domain.Size, format domain.Format) (service.Image, error) {
 	f.opened.user, f.opened.size, f.opened.format = userID, size, format
 	return f.image()
+}
+
+func (f *fakeService) Delete(_ context.Context, requesterID, avatarID string) error {
+	f.deleted.requester, f.deleted.id = requesterID, avatarID
+	return f.deleteErr
+}
+
+func (f *fakeService) DeleteCurrent(_ context.Context, requesterID, userID string) error {
+	f.deleted.requester, f.deleted.user = requesterID, userID
+	return f.deleteErr
 }
 
 func serve(svc *fakeService, req *http.Request) *httptest.ResponseRecorder {
@@ -269,4 +281,51 @@ func TestListUserAvatars(t *testing.T) {
 
 	rec = serve(svc, httptest.NewRequest(http.MethodGet, "/api/v1/users/other/avatars", nil))
 	assert.JSONEq(t, `[]`, rec.Body.String())
+}
+
+func deleteRequest(path, uid string) *http.Request {
+	req := httptest.NewRequest(http.MethodDelete, path, nil)
+	if uid != "" {
+		req.Header.Set("X-User-ID", uid)
+	}
+	return req
+}
+
+func TestDeleteAvatar(t *testing.T) {
+	svc := &fakeService{}
+	rec := serve(svc, deleteRequest("/api/v1/avatars/a1", "u"))
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Empty(t, rec.Body.String())
+	assert.Equal(t, "u", svc.deleted.requester)
+	assert.Equal(t, "a1", svc.deleted.id)
+}
+
+func TestDeleteUserAvatar(t *testing.T) {
+	svc := &fakeService{}
+	rec := serve(svc, deleteRequest("/api/v1/users/u/avatar", "u"))
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, "u", svc.deleted.requester)
+	assert.Equal(t, "u", svc.deleted.user)
+}
+
+func TestDeleteErrors(t *testing.T) {
+	for _, path := range []string{"/api/v1/avatars/a1", "/api/v1/users/u/avatar"} {
+		t.Run(path, func(t *testing.T) {
+			svc := &fakeService{}
+			rec := serve(svc, deleteRequest(path, ""))
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.JSONEq(t, `{"error":"Missing X-User-ID header"}`, rec.Body.String())
+			assert.Empty(t, svc.deleted.requester)
+
+			rec = serve(&fakeService{deleteErr: domain.ErrForbidden}, deleteRequest(path, "intruder"))
+			assert.Equal(t, http.StatusForbidden, rec.Code)
+			assert.JSONEq(t, `{"error":"Forbidden","details":"You can only delete your own avatars"}`, rec.Body.String())
+
+			rec = serve(&fakeService{deleteErr: domain.ErrNotFound}, deleteRequest(path, "u"))
+			assert.Equal(t, http.StatusNotFound, rec.Code)
+
+			rec = serve(&fakeService{deleteErr: errors.New("db down")}, deleteRequest(path, "u"))
+			assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		})
+	}
 }

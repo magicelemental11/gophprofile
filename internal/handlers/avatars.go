@@ -29,6 +29,8 @@ type AvatarService interface {
 	List(ctx context.Context, userID string) ([]domain.Avatar, error)
 	Open(ctx context.Context, id string, size domain.Size, format domain.Format) (service.Image, error)
 	OpenLatest(ctx context.Context, userID string, size domain.Size, format domain.Format) (service.Image, error)
+	Delete(ctx context.Context, requesterID, avatarID string) error
+	DeleteCurrent(ctx context.Context, requesterID, userID string) error
 }
 
 type api struct {
@@ -94,10 +96,18 @@ func userID(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get("X-User-ID"))
 }
 
-func (h *api) upload(w http.ResponseWriter, r *http.Request) {
+func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	uid := userID(r)
 	if uid == "" {
 		writeError(w, http.StatusBadRequest, "Missing X-User-ID header", "")
+		return "", false
+	}
+	return uid, true
+}
+
+func (h *api) upload(w http.ResponseWriter, r *http.Request) {
+	uid, ok := requireUserID(w, r)
+	if !ok {
 		return
 	}
 	a, err := h.receive(w, r, uid)
@@ -219,6 +229,30 @@ func (h *api) list(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, metadata(a))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *api) delete(w http.ResponseWriter, r *http.Request) {
+	uid, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	h.respondDeleted(w, h.svc.Delete(r.Context(), uid, chi.URLParam(r, "id")))
+}
+
+func (h *api) deleteCurrent(w http.ResponseWriter, r *http.Request) {
+	uid, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	h.respondDeleted(w, h.svc.DeleteCurrent(r.Context(), uid, chi.URLParam(r, "user_id")))
+}
+
+func (h *api) respondDeleted(w http.ResponseWriter, err error) {
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *api) fail(w http.ResponseWriter, err error) {

@@ -68,7 +68,7 @@ func run(ctx context.Context, cfg config.Worker, lg *zap.Logger) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	closed := broker.NotifyClose()
-	queues := []string{rabbitmq.QueueProcessing}
+	queues := []string{rabbitmq.QueueProcessing, rabbitmq.QueueDeletion}
 	errCh := make(chan error, len(queues))
 	for _, q := range queues {
 		go func() { errCh <- broker.Consume(ctx, q, cfg.Prefetch, handle) }()

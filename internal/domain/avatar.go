@@ -148,9 +148,14 @@ func (a Avatar) Status() string {
 
 // AllKeys returns every object key the avatar may own: the original and all thumbnails.
 func (a Avatar) AllKeys() []string {
-	keys := []string{a.S3Key}
+	return append([]string{a.S3Key}, ThumbnailKeysOf(a.ID)...)
+}
+
+// ThumbnailKeysOf returns the keys of every thumbnail the avatar may have, generated or not.
+func ThumbnailKeysOf(avatarID string) []string {
+	keys := make([]string, 0, len(ThumbnailSizes))
 	for _, s := range ThumbnailSizes {
-		keys = append(keys, ThumbnailKey(a.ID, s))
+		keys = append(keys, ThumbnailKey(avatarID, s))
 	}
 	return keys
 }

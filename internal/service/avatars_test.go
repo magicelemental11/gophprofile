@@ -203,3 +203,67 @@ func TestOpenLatestGetList(t *testing.T) {
 	require.Len(t, list, 2)
 	assert.Equal(t, second.ID, list[0].ID)
 }
+
+func TestDelete(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	e.pub.events = nil
+
+	require.NoError(t, e.svc.Delete(context.Background(), "u", a.ID))
+
+	_, err := e.svc.Get(context.Background(), a.ID)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+	require.Len(t, e.pub.events, 1)
+	assert.Equal(t, domain.RoutingDeleted, e.pub.events[0].key)
+	assert.Equal(t, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}, e.pub.events[0].event)
+}
+
+func TestDeleteErrors(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	e.pub.events = nil
+
+	assert.ErrorIs(t, e.svc.Delete(context.Background(), "intruder", a.ID), domain.ErrForbidden)
+	assert.ErrorIs(t, e.svc.Delete(context.Background(), "u", "missing"), domain.ErrNotFound)
+
+	e.repo.failNext = errBoom
+	assert.ErrorIs(t, e.svc.Delete(context.Background(), "u", a.ID), errBoom)
+
+	assert.Empty(t, e.pub.events)
+	_, err := e.svc.Get(context.Background(), a.ID)
+	assert.NoError(t, err, "avatar is kept")
+}
+
+func TestDeletePublishFailureStillSucceeds(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	e.pub.err = errBoom
+
+	require.NoError(t, e.svc.Delete(context.Background(), "u", a.ID))
+	_, err := e.svc.Get(context.Background(), a.ID)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestDeleteCurrent(t *testing.T) {
+	e := newEnv()
+	older := e.upload(t, "u")
+	newer := e.upload(t, "u")
+
+	require.NoError(t, e.svc.DeleteCurrent(context.Background(), "u", "u"))
+	_, err := e.svc.Get(context.Background(), newer.ID)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+	_, err = e.svc.Get(context.Background(), older.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, e.svc.DeleteCurrent(context.Background(), "u", "u"))
+	assert.ErrorIs(t, e.svc.DeleteCurrent(context.Background(), "u", "u"), domain.ErrNotFound)
+}
+
+func TestDeleteCurrentForbidden(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+
+	assert.ErrorIs(t, e.svc.DeleteCurrent(context.Background(), "intruder", "u"), domain.ErrForbidden)
+	_, err := e.svc.Get(context.Background(), a.ID)
+	assert.NoError(t, err)
+}
