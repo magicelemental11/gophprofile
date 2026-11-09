@@ -46,9 +46,11 @@
 ## Запуск в Docker
 
 ```sh
-cp .env.example .env
+make env                       # .env из .env.example со случайными паролями
 docker compose up --build -d   # или make up
 ```
+
+Логины и пароли PostgreSQL, RabbitMQ и MinIO задаются только в `.env` (он не коммитится), без них `docker compose` не запустится. Пароли можно вписать в `.env` и вручную, но они попадают в URL подключения, поэтому должны быть URL-safe. PostgreSQL и RabbitMQ запоминают учётные данные при первом запуске, поэтому после их смены тома нужно пересоздать: `docker compose down -v`.
 
 Поднимаются server (`http://localhost:8080`), worker, PostgreSQL, RabbitMQ (management — `http://localhost:15672`) и MinIO (консоль — `http://localhost:9001`). Server и worker собираются в один образ из `docker/Dockerfile`. При потере соединения с RabbitMQ оба процесса завершаются, и Compose перезапускает их. Логи — `make logs`, остановка — `make down`.
 
@@ -57,7 +59,7 @@ MinIO запускается из образа `pgsty/minio` — официал�
 ## Запуск для разработки
 
 ```sh
-cp .env.example .env
+make env
 make up-deps       # PostgreSQL, RabbitMQ, MinIO
 make run-server    # миграции применяются при старте
 make run-worker
