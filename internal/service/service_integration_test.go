@@ -5,10 +5,10 @@ package service_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
-	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -25,19 +25,16 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
 )
 
-type capturePublisher struct {
-	mu     sync.Mutex
-	events map[string][]any
+func publishPending(t *testing.T, repo *postgres.Repository) []domain.Event {
+	t.Helper()
+	var events []domain.Event
+	_, err := repo.PublishPending(context.Background(), 10, func(_ context.Context, ev domain.Event) error {
+		events = append(events, ev)
+		return nil
+	})
+	require.NoError(t, err)
+	return events
 }
-
-func (p *capturePublisher) Publish(_ context.Context, key string, event any) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.events[key] = append(p.events[key], event)
-	return nil
-}
-
-func (p *capturePublisher) Ping(context.Context) error { return nil }
 
 func startDeps(t *testing.T) (*postgres.Repository, *s3.Storage) {
 	t.Helper()
@@ -96,13 +93,14 @@ func assertObject(t *testing.T, store *s3.Storage, key string, exists bool) {
 func TestAvatarLifecycle(t *testing.T) {
 	ctx := context.Background()
 	repo, store := startDeps(t)
-	pub := &capturePublisher{events: map[string][]any{}}
-	svc := service.NewAvatarService(repo, store, pub, zap.NewNop(), 10<<20)
+	svc := service.NewAvatarService(repo, store, zap.NewNop(), 10<<20)
 	proc := service.NewProcessor(repo, store, zap.NewNop())
 
 	a, err := svc.Upload(ctx, "gopher@example.com", "cat.png", bytes.NewReader(pngImage(t)))
 	require.NoError(t, err)
-	require.Len(t, pub.events[domain.RoutingUploaded], 1)
+	events := publishPending(t, repo)
+	require.Len(t, events, 1)
+	assert.Equal(t, domain.RoutingUploaded, events[0].RoutingKey)
 
 	ev := domain.AvatarProcessEvent{AvatarID: a.ID, Operations: domain.DefaultOperations()}
 	require.NoError(t, proc.Process(ctx, uuid.NewString(), ev))
@@ -115,10 +113,12 @@ func TestAvatarLifecycle(t *testing.T) {
 
 	assert.ErrorIs(t, svc.Delete(ctx, "intruder", a.ID), domain.ErrForbidden)
 	require.NoError(t, svc.Delete(ctx, "gopher@example.com", a.ID))
-	require.Len(t, pub.events[domain.RoutingDeleted], 1)
-	del, ok := pub.events[domain.RoutingDeleted][0].(domain.AvatarDeleteEvent)
-	require.True(t, ok)
-	require.NoError(t, proc.DeleteFiles(ctx, uuid.NewString(), del))
+	events = publishPending(t, repo)
+	require.Len(t, events, 1)
+	require.Equal(t, domain.RoutingDeleted, events[0].RoutingKey)
+	var del domain.AvatarDeleteEvent
+	require.NoError(t, json.Unmarshal(events[0].Payload, &del))
+	require.NoError(t, proc.DeleteFiles(ctx, events[0].ID, del))
 
 	for _, k := range a.AllKeys() {
 		assertObject(t, store, k, false)

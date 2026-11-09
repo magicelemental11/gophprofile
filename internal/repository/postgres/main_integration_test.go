@@ -41,7 +41,7 @@ func newTestRepo(t *testing.T) *Repository {
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
 	require.NoError(t, r.Migrate())
-	_, err = r.pool.Exec(ctx, `TRUNCATE avatars, processed_messages`)
+	_, err = r.pool.Exec(ctx, `TRUNCATE avatars, processed_messages, outbox`)
 	require.NoError(t, err)
 	return r
 }
@@ -53,7 +53,7 @@ func TestMigrateIdempotent(t *testing.T) {
 
 	var n int
 	err := r.pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM information_schema.tables WHERE table_name IN ('avatars', 'processed_messages')`).Scan(&n)
+		`SELECT count(*) FROM information_schema.tables WHERE table_name IN ('avatars', 'processed_messages', 'outbox')`).Scan(&n)
 	require.NoError(t, err)
-	require.Equal(t, 2, n)
+	require.Equal(t, 3, n)
 }

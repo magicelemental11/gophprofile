@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,14 +28,13 @@ type Image struct {
 type AvatarService struct {
 	repo    AvatarRepository
 	store   ObjectStorage
-	pub     EventPublisher
 	log     *zap.Logger
 	maxSize int64
 }
 
 // NewAvatarService wires the service to its ports; maxSize limits an upload in bytes.
-func NewAvatarService(repo AvatarRepository, store ObjectStorage, pub EventPublisher, log *zap.Logger, maxSize int64) *AvatarService {
-	return &AvatarService{repo: repo, store: store, pub: pub, log: log, maxSize: maxSize}
+func NewAvatarService(repo AvatarRepository, store ObjectStorage, log *zap.Logger, maxSize int64) *AvatarService {
+	return &AvatarService{repo: repo, store: store, log: log, maxSize: maxSize}
 }
 
 // MaxSize returns the upload limit in bytes.
@@ -42,8 +42,9 @@ func (s *AvatarService) MaxSize() int64 {
 	return s.maxSize
 }
 
-// Upload validates and stores a new avatar, then asks the worker to build thumbnails.
-// A failed publish is logged but does not fail the upload: thumbnails are then built on request.
+// Upload validates and stores a new avatar. The event asking the worker to build thumbnails is
+// queued in the outbox together with the uploaded status, so it cannot be lost. If the upload
+// cannot be completed, the stored original is removed and the avatar is marked failed.
 func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error) {
 	data, err := io.ReadAll(io.LimitReader(r, s.maxSize+1))
 	if err != nil {
@@ -58,6 +59,11 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 	}
 
 	id := uuid.NewString()
+	key := domain.OriginalKey(id, info.Format)
+	ev, err := newEvent(domain.RoutingUploaded, domain.AvatarUploadEvent{AvatarID: id, UserID: userID, S3Key: key})
+	if err != nil {
+		return domain.Avatar{}, err
+	}
 	a, err := s.repo.Create(ctx, domain.Avatar{
 		ID:        id,
 		UserID:    userID,
@@ -66,7 +72,7 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 		SizeBytes: int64(len(data)),
 		Width:     info.Width,
 		Height:    info.Height,
-		S3Key:     domain.OriginalKey(id, info.Format),
+		S3Key:     key,
 	})
 	if err != nil {
 		return domain.Avatar{}, err
@@ -74,26 +80,38 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 
 	etag, err := s.store.Put(ctx, a.S3Key, bytes.NewReader(data), int64(len(data)), a.MimeType)
 	if err != nil {
-		if errStatus := s.repo.SetUploadStatus(context.WithoutCancel(ctx), a.ID, domain.UploadFailed); errStatus != nil {
-			s.log.Error("mark upload failed", zap.String("avatar_id", a.ID), zap.Error(errStatus))
-		}
+		s.markUploadFailed(ctx, a.ID)
 		return domain.Avatar{}, err
 	}
-	if err := s.repo.MarkUploaded(ctx, a.ID, etag); err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			if errDel := s.store.Delete(context.WithoutCancel(ctx), []string{a.S3Key}); errDel != nil {
-				s.log.Error("remove original of avatar deleted during upload", zap.String("avatar_id", a.ID), zap.Error(errDel))
-			}
+	if err := s.repo.MarkUploaded(ctx, a.ID, etag, ev); err != nil {
+		s.discardOriginal(ctx, a)
+		if !errors.Is(err, domain.ErrNotFound) {
+			s.markUploadFailed(ctx, a.ID)
 		}
 		return domain.Avatar{}, err
 	}
 	a.UploadStatus, a.ETag = domain.UploadUploaded, etag
-
-	event := domain.AvatarUploadEvent{AvatarID: a.ID, UserID: a.UserID, S3Key: a.S3Key}
-	if err := s.pub.Publish(context.WithoutCancel(ctx), domain.RoutingUploaded, event); err != nil {
-		s.log.Error("publish upload event", zap.String("avatar_id", a.ID), zap.Error(err))
-	}
 	return a, nil
+}
+
+func (s *AvatarService) markUploadFailed(ctx context.Context, id string) {
+	if err := s.repo.SetUploadStatus(context.WithoutCancel(ctx), id, domain.UploadFailed); err != nil {
+		s.log.Error("mark upload failed", zap.String("avatar_id", id), zap.Error(err))
+	}
+}
+
+func (s *AvatarService) discardOriginal(ctx context.Context, a domain.Avatar) {
+	if err := s.store.Delete(context.WithoutCancel(ctx), []string{a.S3Key}); err != nil {
+		s.log.Error("remove original of unfinished upload", zap.String("avatar_id", a.ID), zap.Error(err))
+	}
+}
+
+func newEvent(routingKey string, payload any) (domain.Event, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return domain.Event{}, fmt.Errorf("encode %s event: %w", routingKey, err)
+	}
+	return domain.Event{ID: uuid.NewString(), RoutingKey: routingKey, Payload: body}, nil
 }
 
 // Get returns the metadata of a non-deleted avatar.
@@ -181,8 +199,8 @@ func (s *AvatarService) read(ctx context.Context, v variant) (io.ReadCloser, err
 	return io.NopCloser(&buf), nil
 }
 
-// Delete soft-deletes the avatar if it belongs to the requester and asks the worker to remove its files.
-// A failed publish is logged but does not fail the deletion: the files are then left orphaned.
+// Delete soft-deletes the avatar if it belongs to the requester and, in the same transaction,
+// queues the event asking the worker to remove its files.
 func (s *AvatarService) Delete(ctx context.Context, requesterID, avatarID string) error {
 	a, err := s.repo.Get(ctx, avatarID)
 	if err != nil {
@@ -207,12 +225,9 @@ func (s *AvatarService) delete(ctx context.Context, requesterID string, a domain
 	if a.UserID != requesterID {
 		return domain.ErrForbidden
 	}
-	if err := s.repo.SoftDelete(ctx, a.ID); err != nil {
+	ev, err := newEvent(domain.RoutingDeleted, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()})
+	if err != nil {
 		return err
 	}
-	event := domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}
-	if err := s.pub.Publish(context.WithoutCancel(ctx), domain.RoutingDeleted, event); err != nil {
-		s.log.Error("publish delete event", zap.String("avatar_id", a.ID), zap.Error(err))
-	}
-	return nil
+	return s.repo.SoftDelete(ctx, a.ID, ev)
 }

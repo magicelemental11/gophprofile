@@ -159,7 +159,7 @@ func TestProcessMissingAvatarRemovesLeftoverThumbnails(t *testing.T) {
 	key := domain.ThumbnailKey(a.ID, domain.Size100)
 	_, err := e.store.Put(context.Background(), key, bytes.NewReader([]byte("x")), 1, "image/jpeg")
 	require.NoError(t, err)
-	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID))
+	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID, domain.Event{}))
 
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
 	assert.False(t, e.store.has(key))
@@ -174,7 +174,7 @@ type deleteOnComplete struct {
 }
 
 func (r *deleteOnComplete) CompleteProcessing(ctx context.Context, id string, keys map[domain.Size]string, msg string) (bool, error) {
-	if err := r.SoftDelete(ctx, id); err != nil {
+	if err := r.SoftDelete(ctx, id, domain.Event{}); err != nil {
 		return false, err
 	}
 	return r.fakeRepo.CompleteProcessing(ctx, id, keys, msg)
@@ -198,7 +198,7 @@ func TestDeleteFiles(t *testing.T) {
 	p := newProcessor(e)
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
 	ev := domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}
-	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID))
+	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID, domain.Event{}))
 	msg := uuid.NewString()
 
 	require.NoError(t, p.DeleteFiles(context.Background(), msg, ev))
@@ -237,7 +237,7 @@ func TestDeleteFilesEmptyKeysStillRemovesThumbnails(t *testing.T) {
 	a := e.upload(t, "u")
 	p := newProcessor(e)
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
-	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID))
+	require.NoError(t, e.repo.SoftDelete(context.Background(), a.ID, domain.Event{}))
 	msg := uuid.NewString()
 
 	require.NoError(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID}))
@@ -303,7 +303,7 @@ type deleteOnStatus struct {
 }
 
 func (r *deleteOnStatus) SetProcessingStatus(ctx context.Context, id string, s domain.ProcessingStatus) error {
-	if err := r.SoftDelete(ctx, id); err != nil {
+	if err := r.SoftDelete(ctx, id, domain.Event{}); err != nil {
 		return err
 	}
 	return r.fakeRepo.SetProcessingStatus(ctx, id, s)

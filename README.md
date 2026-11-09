@@ -5,21 +5,22 @@
 ## Архитектура
 
 ```
-                   ┌──────────────────────── server ────────────────────────┐
-  клиент ──HTTP──▶ │ handlers (chi) ──▶ service ──▶ repository ──▶ PostgreSQL│
-  браузер          │                       │   └──▶ storage ─────▶ MinIO (S3)│
-                   │                       └──▶ broker ──┐                  │
-                   └─────────────────────────────────────┼──────────────────┘
-                                                         ▼
-                                          RabbitMQ  avatars.exchange (topic)
-                                            avatar.uploaded ─┐   avatar.deleted
-                                            avatar.process  ─┤          │
-                                                             ▼          ▼
-                                            avatars.processing   avatars.deletion
-                                                             │          │
-                   ┌──────────────────────── worker ─────────┼──────────┼───────┐
-                   │ worker ──▶ service.Processor ──▶ PostgreSQL, MinIO        │
-                   └─────────────────────────────────────────────────────────────┘
+                   ┌──────────────────────── server ─────────────────────────┐
+  клиент ──HTTP──▶ │ handlers (chi) ──▶ service ──▶ repository ──▶ PostgreSQL │
+  браузер          │                       └──▶ storage ─────▶ MinIO (S3)    │
+                   │ relay ◀── таблица outbox в PostgreSQL                   │
+                   │   └──▶ broker ──┐                                       │
+                   └─────────────────┼───────────────────────────────────────┘
+                                     ▼
+                     RabbitMQ  avatars.exchange (topic)
+                       avatar.uploaded ─┐   avatar.deleted
+                       avatar.process  ─┤          │
+                                        ▼          ▼
+                       avatars.processing   avatars.deletion
+                                        │          │
+                   ┌─────── worker ─────┼──────────┼────────────────────┐
+                   │ worker ──▶ service.Processor ──▶ PostgreSQL, MinIO │
+                   └────────────────────────────────────────────────────┘
                      сообщения, не обработанные после всех попыток ──▶ avatars.dlx ──▶ avatars.dlq
 ```
 
@@ -34,14 +35,16 @@
 
 Поток событий:
 
-1. `POST /api/v1/avatars` проверяет файл, создаёт запись (`upload_status=uploading`), кладёт оригинал в `originals/{id}.{ext}`, отмечает `uploaded` и публикует `avatar.uploaded`. Клиент сразу получает 201 со статусом `processing`.
+1. `POST /api/v1/avatars` проверяет файл, создаёт запись (`upload_status=uploading`), кладёт оригинал в `originals/{id}.{ext}`, затем в одной транзакции отмечает `uploaded` и кладёт событие `avatar.uploaded` в таблицу `outbox`. Клиент сразу получает 201 со статусом `processing`. Если транзакция не прошла, оригинал удаляется из MinIO, а запись помечается `failed`.
 2. Воркер берёт сообщение из `avatars.processing`, строит миниатюры `thumbnails/{id}/{size}.jpg`, в одной транзакции сохраняет ключи, ставит `processing_status=completed` и записывает id сообщения в `processed_messages` — повторная доставка того же сообщения ничего не делает.
 3. Ошибка обработки повторяется до `WORKER_MAX_RETRIES` раз с задержкой 0.5 с, 1 с, 2 с… (не больше 30 с). После последней попытки статус становится `failed`, сообщение уходит в `avatars.dlq`. Битое сообщение отправляется в DLQ сразу.
-4. `DELETE` помечает запись удалённой (`deleted_at`) и публикует `avatar.deleted` с ключами файлов; воркер удаляет объекты из MinIO, только если запись действительно помечена удалённой. Если аватар удалили во время обработки, воркер убирает уже созданные миниатюры.
+4. `DELETE` в одной транзакции помечает запись удалённой (`deleted_at`) и кладёт в `outbox` событие `avatar.deleted` с ключами файлов; воркер удаляет объекты из MinIO, только если запись действительно помечена удалённой. Если аватар удалили во время обработки, воркер убирает уже созданные миниатюры.
+
+События отправляет в RabbitMQ relay внутри сервера (transactional outbox): раз в секунду он забирает из `outbox` пачку событий (`FOR UPDATE SKIP LOCKED`, так что несколько реплик сервера не мешают друг другу), публикует их с подтверждением брокера и удаляет отправленные. Если RabbitMQ недоступен, события ждут в таблице и уходят после восстановления связи, поэтому аватар не может навсегда остаться в `processing` из-за потерянного события. Доставка «хотя бы один раз»: id строки outbox становится `message_id`, и воркер отбрасывает повторы по `processed_messages`.
 
 Пока миниатюр нет, `?size=100x100` отдаётся ресайзом оригинала на лету. В списке аватаров только успешно загруженные записи.
 
-Сервер сам публикует только `avatar.uploaded` и `avatar.deleted`. Пересобрать миниатюры можно вручную: отправить в `avatars.exchange` с ключом `avatar.process` и новым UUID в `message_id` событие `{"avatar_id":"…","operations":[{"type":"resize","size":"100x100"}]}`, например из management UI RabbitMQ (http://localhost:15672).
+Сервер сам отправляет только `avatar.uploaded` и `avatar.deleted`. Пересобрать миниатюры можно вручную: отправить в `avatars.exchange` с ключом `avatar.process` и новым UUID в `message_id` событие `{"avatar_id":"…","operations":[{"type":"resize","size":"100x100"}]}`, например из management UI RabbitMQ (http://localhost:15672).
 
 ## Запуск в Docker
 

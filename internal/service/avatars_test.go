@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -19,13 +20,12 @@ import (
 type env struct {
 	repo  *fakeRepo
 	store *fakeStore
-	pub   *fakePublisher
 	svc   *AvatarService
 }
 
 func newEnv() *env {
-	e := &env{repo: newFakeRepo(), store: newFakeStore(), pub: &fakePublisher{}}
-	e.svc = NewAvatarService(e.repo, e.store, e.pub, zap.NewNop(), 1<<20)
+	e := &env{repo: newFakeRepo(), store: newFakeStore()}
+	e.svc = NewAvatarService(e.repo, e.store, zap.NewNop(), 1<<20)
 	return e
 }
 
@@ -51,9 +51,12 @@ func TestUpload(t *testing.T) {
 
 	assert.True(t, e.store.has(a.S3Key))
 	assert.Equal(t, "image/png", e.store.types[a.S3Key])
-	require.Len(t, e.pub.events, 1)
-	assert.Equal(t, domain.RoutingUploaded, e.pub.events[0].key)
-	assert.Equal(t, domain.AvatarUploadEvent{AvatarID: a.ID, UserID: a.UserID, S3Key: a.S3Key}, e.pub.events[0].event)
+	events := e.repo.queued()
+	require.Len(t, events, 1)
+	assert.Equal(t, domain.RoutingUploaded, events[0].RoutingKey)
+	assert.NoError(t, uuid.Validate(events[0].ID))
+	assert.Equal(t, domain.AvatarUploadEvent{AvatarID: a.ID, UserID: a.UserID, S3Key: a.S3Key},
+		decodeEvent[domain.AvatarUploadEvent](t, events[0]))
 }
 
 func TestUploadRejects(t *testing.T) {
@@ -65,7 +68,7 @@ func TestUploadRejects(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrTooLarge)
 
 	assert.Empty(t, e.repo.avatars)
-	assert.Empty(t, e.pub.events)
+	assert.Empty(t, e.repo.queued())
 }
 
 func TestUploadCleansFileName(t *testing.T) {
@@ -86,14 +89,49 @@ func TestUploadStorageFailure(t *testing.T) {
 	for _, a := range e.repo.avatars {
 		assert.Equal(t, domain.UploadFailed, a.UploadStatus)
 	}
-	assert.Empty(t, e.pub.events)
+	assert.Empty(t, e.repo.queued())
 }
 
-func TestUploadPublishFailureStillSucceeds(t *testing.T) {
+func TestUploadMarkUploadedFailureCleansUp(t *testing.T) {
 	e := newEnv()
-	e.pub.err = errBoom
-	a := e.upload(t, "u")
-	assert.Equal(t, domain.UploadUploaded, a.UploadStatus)
+	e.svc = NewAvatarService(&failMarkUploaded{fakeRepo: e.repo, err: errBoom}, e.store, zap.NewNop(), 1<<20)
+
+	_, err := e.svc.Upload(context.Background(), "u", "cat.png", bytes.NewReader(pngBytes(t, 10, 10)))
+	require.ErrorIs(t, err, errBoom)
+
+	assert.Equal(t, 1, e.store.puts)
+	assert.Empty(t, e.store.objects, "original is removed")
+	require.Len(t, e.repo.avatars, 1)
+	for _, a := range e.repo.avatars {
+		assert.Equal(t, domain.UploadFailed, a.UploadStatus)
+	}
+	assert.Empty(t, e.repo.queued())
+}
+
+func TestUploadCleanupAfterClientGone(t *testing.T) {
+	e := newEnv()
+	ctx, cancel := context.WithCancel(context.Background())
+	e.svc = NewAvatarService(&failMarkUploaded{fakeRepo: e.repo, err: context.Canceled, before: cancel}, e.store, zap.NewNop(), 1<<20)
+
+	_, err := e.svc.Upload(ctx, "u", "cat.png", bytes.NewReader(pngBytes(t, 10, 10)))
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, e.store.objects)
+	for _, a := range e.repo.avatars {
+		assert.Equal(t, domain.UploadFailed, a.UploadStatus)
+	}
+}
+
+type failMarkUploaded struct {
+	*fakeRepo
+	err    error
+	before func()
+}
+
+func (r *failMarkUploaded) MarkUploaded(context.Context, string, string, domain.Event) error {
+	if r.before != nil {
+		r.before()
+	}
+	return r.err
 }
 
 func TestUploadRepoFailure(t *testing.T) {
@@ -231,21 +269,23 @@ func TestOpenLatestGetList(t *testing.T) {
 func TestDelete(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
-	e.pub.events = nil
+	e.repo.outbox = nil
 
 	require.NoError(t, e.svc.Delete(context.Background(), "u", a.ID))
 
 	_, err := e.svc.Get(context.Background(), a.ID)
 	assert.ErrorIs(t, err, domain.ErrNotFound)
-	require.Len(t, e.pub.events, 1)
-	assert.Equal(t, domain.RoutingDeleted, e.pub.events[0].key)
-	assert.Equal(t, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}, e.pub.events[0].event)
+	events := e.repo.queued()
+	require.Len(t, events, 1)
+	assert.Equal(t, domain.RoutingDeleted, events[0].RoutingKey)
+	assert.Equal(t, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()},
+		decodeEvent[domain.AvatarDeleteEvent](t, events[0]))
 }
 
 func TestDeleteErrors(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
-	e.pub.events = nil
+	e.repo.outbox = nil
 
 	assert.ErrorIs(t, e.svc.Delete(context.Background(), "intruder", a.ID), domain.ErrForbidden)
 	assert.ErrorIs(t, e.svc.Delete(context.Background(), "u", "missing"), domain.ErrNotFound)
@@ -253,19 +293,9 @@ func TestDeleteErrors(t *testing.T) {
 	e.repo.failNext = errBoom
 	assert.ErrorIs(t, e.svc.Delete(context.Background(), "u", a.ID), errBoom)
 
-	assert.Empty(t, e.pub.events)
+	assert.Empty(t, e.repo.queued())
 	_, err := e.svc.Get(context.Background(), a.ID)
 	assert.NoError(t, err, "avatar is kept")
-}
-
-func TestDeletePublishFailureStillSucceeds(t *testing.T) {
-	e := newEnv()
-	a := e.upload(t, "u")
-	e.pub.err = errBoom
-
-	require.NoError(t, e.svc.Delete(context.Background(), "u", a.ID))
-	_, err := e.svc.Get(context.Background(), a.ID)
-	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestDeleteCurrent(t *testing.T) {
@@ -292,35 +322,23 @@ func TestDeleteCurrentForbidden(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestDeletePublishesAfterClientGone(t *testing.T) {
-	e := newEnv()
-	a := e.upload(t, "u")
-	e.pub.events = nil
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	require.NoError(t, e.svc.Delete(ctx, "u", a.ID))
-	require.Len(t, e.pub.events, 1)
-	assert.Equal(t, domain.RoutingDeleted, e.pub.events[0].key)
-}
-
 func TestUploadDeletedMidwayRemovesOriginal(t *testing.T) {
 	e := newEnv()
-	e.svc = NewAvatarService(&deleteOnMarkUploaded{fakeRepo: e.repo}, e.store, e.pub, zap.NewNop(), 1<<20)
+	e.svc = NewAvatarService(&deleteOnMarkUploaded{fakeRepo: e.repo}, e.store, zap.NewNop(), 1<<20)
 
 	_, err := e.svc.Upload(context.Background(), "u", "cat.png", bytes.NewReader(pngBytes(t, 10, 10)))
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	assert.Empty(t, e.store.objects)
-	assert.Empty(t, e.pub.events)
+	assert.Empty(t, e.repo.queued())
 }
 
 type deleteOnMarkUploaded struct {
 	*fakeRepo
 }
 
-func (r *deleteOnMarkUploaded) MarkUploaded(ctx context.Context, id, etag string) error {
-	if err := r.SoftDelete(ctx, id); err != nil {
-		return err
-	}
-	return r.fakeRepo.MarkUploaded(ctx, id, etag)
+func (r *deleteOnMarkUploaded) MarkUploaded(ctx context.Context, id, etag string, ev domain.Event) error {
+	r.mu.Lock()
+	r.deleted[id] = true
+	r.mu.Unlock()
+	return r.fakeRepo.MarkUploaded(ctx, id, etag, ev)
 }

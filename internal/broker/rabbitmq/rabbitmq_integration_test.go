@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
@@ -52,12 +53,15 @@ func TestPublishConsume(t *testing.T) {
 	}()
 
 	ev := domain.AvatarUploadEvent{AvatarID: "a1", UserID: "u", S3Key: "originals/a1.png"}
-	require.NoError(t, b.Publish(context.Background(), domain.RoutingUploaded, ev))
+	body, err := json.Marshal(ev)
+	require.NoError(t, err)
+	msgID := uuid.NewString()
+	require.NoError(t, b.Publish(context.Background(), domain.Event{ID: msgID, RoutingKey: domain.RoutingUploaded, Payload: body}))
 
 	select {
 	case m := <-got:
 		assert.Equal(t, domain.RoutingUploaded, m.RoutingKey)
-		assert.NotEmpty(t, m.ID)
+		assert.Equal(t, msgID, m.ID)
 		var decoded domain.AvatarUploadEvent
 		require.NoError(t, json.Unmarshal(m.Body, &decoded))
 		assert.Equal(t, ev, decoded)
@@ -87,7 +91,8 @@ func TestFailedMessageGoesToDeadLetter(t *testing.T) {
 		})
 	}()
 
-	require.NoError(t, b.Publish(context.Background(), domain.RoutingDeleted, domain.AvatarDeleteEvent{AvatarID: "a2"}))
+	ev := domain.Event{ID: uuid.NewString(), RoutingKey: domain.RoutingDeleted, Payload: []byte(`{"avatar_id":"a2"}`)}
+	require.NoError(t, b.Publish(context.Background(), ev))
 	select {
 	case m := <-dead:
 		assert.Equal(t, domain.RoutingDeleted, m.RoutingKey)

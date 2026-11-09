@@ -3,7 +3,6 @@ package rabbitmq
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -114,18 +113,15 @@ func (b *Broker) NotifyClose() <-chan *amqp.Error {
 	return b.conn.NotifyClose(make(chan *amqp.Error, 1))
 }
 
-// Publish sends event as persistent JSON with a fresh message id and waits for the broker confirm.
-func (b *Broker) Publish(ctx context.Context, routingKey string, event any) error {
-	body, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("encode event: %w", err)
-	}
+// Publish sends ev as a persistent JSON message with ev.ID as the message id and waits for the broker confirm.
+func (b *Broker) Publish(ctx context.Context, ev domain.Event) error {
+	routingKey := ev.RoutingKey
 	msg := amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
-		MessageId:    uuid.NewString(),
+		MessageId:    ev.ID,
 		Timestamp:    time.Now(),
-		Body:         body,
+		Body:         ev.Payload,
 	}
 
 	b.mu.Lock()

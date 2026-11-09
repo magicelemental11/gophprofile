@@ -3,11 +3,13 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -25,6 +27,7 @@ type fakeRepo struct {
 	avatars   map[string]domain.Avatar
 	deleted   map[string]bool
 	processed map[string]bool
+	outbox    []domain.Event
 	clock     time.Time
 	failNext  error
 }
@@ -117,8 +120,42 @@ func (r *fakeRepo) update(id string, fn func(*domain.Avatar)) error {
 	return nil
 }
 
-func (r *fakeRepo) MarkUploaded(_ context.Context, id, etag string) error {
-	return r.update(id, func(a *domain.Avatar) { a.UploadStatus, a.ETag = domain.UploadUploaded, etag })
+func (r *fakeRepo) MarkUploaded(_ context.Context, id, etag string, ev domain.Event) error {
+	if err := r.update(id, func(a *domain.Avatar) { a.UploadStatus, a.ETag = domain.UploadUploaded, etag }); err != nil {
+		return err
+	}
+	r.queue(ev)
+	return nil
+}
+
+func (r *fakeRepo) queue(ev domain.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.outbox = append(r.outbox, ev)
+}
+
+func (r *fakeRepo) PublishPending(ctx context.Context, limit int, publish func(context.Context, domain.Event) error) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.fail(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for n < len(r.outbox) && n < limit {
+		if err := publish(ctx, r.outbox[n]); err != nil {
+			r.outbox = r.outbox[n:]
+			return n, err
+		}
+		n++
+	}
+	r.outbox = r.outbox[n:]
+	return n, nil
+}
+
+func (r *fakeRepo) queued() []domain.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.outbox)
 }
 
 func (r *fakeRepo) SetUploadStatus(_ context.Context, id string, s domain.UploadStatus) error {
@@ -143,7 +180,7 @@ func (r *fakeRepo) CompleteProcessing(_ context.Context, id string, keys map[dom
 	return true, nil
 }
 
-func (r *fakeRepo) SoftDelete(_ context.Context, id string) error {
+func (r *fakeRepo) SoftDelete(_ context.Context, id string, ev domain.Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.fail(); err != nil {
@@ -153,6 +190,7 @@ func (r *fakeRepo) SoftDelete(_ context.Context, id string) error {
 		return domain.ErrNotFound
 	}
 	r.deleted[id] = true
+	r.outbox = append(r.outbox, ev)
 	return nil
 }
 
@@ -221,11 +259,14 @@ func (s *fakeStore) Get(_ context.Context, key string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func (s *fakeStore) Delete(_ context.Context, keys []string) error {
+func (s *fakeStore) Delete(ctx context.Context, keys []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.delErr != nil {
 		return s.delErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	for _, k := range keys {
 		delete(s.objects, k)
@@ -242,31 +283,38 @@ func (s *fakeStore) has(key string) bool {
 	return ok
 }
 
-type published struct {
-	key   string
-	event any
-}
-
 type fakePublisher struct {
 	mu     sync.Mutex
-	events []published
-	err    error
+	events []domain.Event
+	fails  int
 }
 
-func (p *fakePublisher) Publish(ctx context.Context, key string, event any) error {
+func (p *fakePublisher) Publish(ctx context.Context, ev domain.Event) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.err != nil {
-		return p.err
+	if p.fails > 0 {
+		p.fails--
+		return errBoom
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	p.events = append(p.events, published{key, event})
+	p.events = append(p.events, ev)
 	return nil
 }
 
-func (p *fakePublisher) Ping(context.Context) error { return nil }
+func (p *fakePublisher) published() []domain.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.events)
+}
+
+func decodeEvent[T any](t *testing.T, ev domain.Event) T {
+	t.Helper()
+	var v T
+	require.NoError(t, json.Unmarshal(ev.Payload, &v))
+	return v
+}
 
 func pngBytes(t *testing.T, w, h int) []byte {
 	t.Helper()

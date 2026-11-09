@@ -92,6 +92,10 @@ func (tx *fakeTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.Com
 	return tx.db.Exec(ctx, sql, args...)
 }
 
+func (tx *fakeTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return tx.db.Query(ctx, sql, args...)
+}
+
 func (tx *fakeTx) Commit(context.Context) error {
 	if tx.db.commitErr != nil {
 		return tx.db.commitErr

@@ -132,12 +132,10 @@ func TestUpdates(t *testing.T) {
 		do  func(r *Repository, id string) error
 		sql string
 	}{
-		"MarkUploaded":    {func(r *Repository, id string) error { return r.MarkUploaded(ctx, id, `"e"`) }, `SET upload_status = \$2, etag = \$3`},
 		"SetUploadStatus": {func(r *Repository, id string) error { return r.SetUploadStatus(ctx, id, domain.UploadFailed) }, `SET upload_status = \$2,`},
 		"SetProcessingStatus": {func(r *Repository, id string) error {
 			return r.SetProcessingStatus(ctx, id, domain.ProcessingProcessing)
 		}, `SET processing_status = \$2`},
-		"SoftDelete": {func(r *Repository, id string) error { return r.SoftDelete(ctx, id) }, `SET deleted_at = now\(\)`},
 	}
 	for name, c := range calls {
 		t.Run(name, func(t *testing.T) {
@@ -158,6 +156,75 @@ func TestUpdates(t *testing.T) {
 
 			assert.ErrorIs(t, c.do(r, "bad-id"), domain.ErrNotFound)
 			assert.Len(t, db.calls, 3)
+		})
+	}
+}
+
+func TestUpdatesWithEvent(t *testing.T) {
+	ctx := context.Background()
+	ev := domain.Event{ID: messageID, RoutingKey: "avatar.test", Payload: []byte(`{"a":1}`)}
+	calls := map[string]struct {
+		do  func(r *Repository, id string) error
+		sql string
+	}{
+		"MarkUploaded": {func(r *Repository, id string) error { return r.MarkUploaded(ctx, id, `"e"`, ev) }, `SET upload_status = \$2, etag = \$3`},
+		"SoftDelete":   {func(r *Repository, id string) error { return r.SoftDelete(ctx, id, ev) }, `SET deleted_at = now\(\)`},
+	}
+	for name, c := range calls {
+		t.Run(name, func(t *testing.T) {
+			t.Run("queues event", func(t *testing.T) {
+				r, db := newFakeRepo(t)
+				db.expect(result{affected: 1})
+				db.expect(result{affected: 1})
+
+				require.NoError(t, c.do(r, avatarID))
+				assert.Regexp(t, c.sql+`.* WHERE id = \$1 AND deleted_at IS NULL`, db.calls[0].sql)
+				assert.Equal(t, avatarID, db.calls[0].args[0])
+				db.lastSQL(t, `INSERT INTO outbox`)
+				assert.Equal(t, []any{ev.ID, ev.RoutingKey, ev.Payload}, db.calls[1].args)
+				assert.True(t, db.committed)
+			})
+
+			t.Run("not found", func(t *testing.T) {
+				r, db := newFakeRepo(t)
+				db.expect(result{affected: 0})
+
+				assert.ErrorIs(t, c.do(r, avatarID), domain.ErrNotFound)
+				assert.Len(t, db.calls, 1, "no event for a missing avatar")
+				assert.True(t, db.rolled)
+
+				assert.ErrorIs(t, c.do(r, "bad-id"), domain.ErrNotFound)
+				assert.Len(t, db.calls, 1)
+			})
+
+			for _, step := range []string{"update", "queue"} {
+				t.Run(step+" fails", func(t *testing.T) {
+					r, db := newFakeRepo(t)
+					if step == "queue" {
+						db.expect(result{affected: 1})
+					}
+					db.expect(result{err: errDB})
+
+					err := c.do(r, avatarID)
+					assert.ErrorIs(t, err, errDB)
+					assert.NotErrorIs(t, err, domain.ErrNotFound)
+					assert.True(t, db.rolled)
+				})
+			}
+
+			t.Run("begin fails", func(t *testing.T) {
+				r, db := newFakeRepo(t)
+				db.beginErr = errDB
+				assert.ErrorIs(t, c.do(r, avatarID), errDB)
+			})
+
+			t.Run("commit fails", func(t *testing.T) {
+				r, db := newFakeRepo(t)
+				db.expect(result{affected: 1})
+				db.expect(result{affected: 1})
+				db.commitErr = errDB
+				assert.ErrorIs(t, c.do(r, avatarID), errDB)
+			})
 		})
 	}
 }

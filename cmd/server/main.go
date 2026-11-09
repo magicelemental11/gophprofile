@@ -23,7 +23,10 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
 )
 
-const shutdownTimeout = 10 * time.Second
+const (
+	shutdownTimeout = 10 * time.Second
+	relayInterval   = time.Second
+)
 
 func main() {
 	cfg, err := config.LoadServer(os.Args[1:])
@@ -67,10 +70,21 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 	}
 	defer func() { _ = broker.Close() }()
 
+	relayCtx, stopRelay := context.WithCancel(ctx)
+	relayDone := make(chan struct{})
+	go func() {
+		service.NewRelay(repo, broker, lg, relayInterval).Run(relayCtx)
+		close(relayDone)
+	}()
+	defer func() {
+		stopRelay()
+		<-relayDone
+	}()
+
 	router := handlers.NewRouter(handlers.Deps{
 		Logger:  lg,
 		Health:  map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
-		Avatars: service.NewAvatarService(repo, store, broker, lg, cfg.MaxUploadSize),
+		Avatars: service.NewAvatarService(repo, store, lg, cfg.MaxUploadSize),
 		Web:     web,
 		Security: handlers.Security{
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,

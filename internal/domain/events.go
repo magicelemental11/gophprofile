@@ -43,3 +43,11 @@ type AvatarDeleteEvent struct {
 	AvatarID string   `json:"avatar_id"`
 	S3Keys   []string `json:"s3_keys"`
 }
+
+// Event is an outgoing broker message. It is saved to the outbox in the same transaction as
+// the change it reports and published afterwards; ID becomes the message id used for deduplication.
+type Event struct {
+	ID         string
+	RoutingKey string
+	Payload    []byte
+}

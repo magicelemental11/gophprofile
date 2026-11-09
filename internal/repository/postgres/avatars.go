@@ -70,9 +70,10 @@ func (r *Repository) ListByUser(ctx context.Context, userID string) ([]domain.Av
 	return list, nil
 }
 
-// MarkUploaded records that the original is stored and saves its ETag.
-func (r *Repository) MarkUploaded(ctx context.Context, id, etag string) error {
-	return r.exec(ctx, `UPDATE avatars SET upload_status = $2, etag = $3, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+// MarkUploaded records that the original is stored, saves its ETag and queues ev in the outbox,
+// all in one transaction.
+func (r *Repository) MarkUploaded(ctx context.Context, id, etag string, ev domain.Event) error {
+	return r.execWithEvent(ctx, ev, `UPDATE avatars SET upload_status = $2, etag = $3, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
 		id, domain.UploadUploaded, etag)
 }
 
@@ -114,9 +115,9 @@ func (r *Repository) CompleteProcessing(ctx context.Context, id string, keys map
 	return true, nil
 }
 
-// SoftDelete marks the avatar deleted.
-func (r *Repository) SoftDelete(ctx context.Context, id string) error {
-	return r.exec(ctx, `UPDATE avatars SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, id)
+// SoftDelete marks the avatar deleted and queues ev in the outbox in one transaction.
+func (r *Repository) SoftDelete(ctx context.Context, id string, ev domain.Event) error {
+	return r.execWithEvent(ctx, ev, `UPDATE avatars SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, id)
 }
 
 // IsProcessed reports whether a message with this id was handled before.
@@ -151,6 +152,33 @@ func (r *Repository) exec(ctx context.Context, sql string, id string, args ...an
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (r *Repository) execWithEvent(ctx context.Context, ev domain.Event, sql string, id string, args ...any) error {
+	if !validUUID(id) {
+		return domain.ErrNotFound
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, sql, append([]any{id}, args...)...)
+	if err != nil {
+		return fmt.Errorf("update avatar: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO outbox (id, routing_key, payload) VALUES ($1, $2, $3)`,
+		ev.ID, ev.RoutingKey, ev.Payload); err != nil {
+		return fmt.Errorf("queue event: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

@@ -28,6 +28,10 @@ func newAvatar(userID string) domain.Avatar {
 	}
 }
 
+func testEvent() domain.Event {
+	return domain.Event{ID: uuid.NewString(), RoutingKey: domain.RoutingUploaded, Payload: []byte(`{"avatar_id":"a"}`)}
+}
+
 func TestCreateGet(t *testing.T) {
 	r := newTestRepo(t)
 	ctx := context.Background()
@@ -55,7 +59,7 @@ func TestStatusTransitions(t *testing.T) {
 	a, err := r.Create(ctx, newAvatar("u"))
 	require.NoError(t, err)
 
-	require.NoError(t, r.MarkUploaded(ctx, a.ID, "etag1"))
+	require.NoError(t, r.MarkUploaded(ctx, a.ID, "etag1", testEvent()))
 	require.NoError(t, r.SetProcessingStatus(ctx, a.ID, domain.ProcessingProcessing))
 	got, err := r.Get(ctx, a.ID)
 	require.NoError(t, err)
@@ -68,7 +72,7 @@ func TestStatusTransitions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.UploadFailed, got.UploadStatus)
 
-	assert.ErrorIs(t, r.MarkUploaded(ctx, uuid.NewString(), "x"), domain.ErrNotFound)
+	assert.ErrorIs(t, r.MarkUploaded(ctx, uuid.NewString(), "x", testEvent()), domain.ErrNotFound)
 	assert.ErrorIs(t, r.SetProcessingStatus(ctx, uuid.NewString(), domain.ProcessingFailed), domain.ErrNotFound)
 }
 
@@ -81,7 +85,7 @@ func TestLatestAndList(t *testing.T) {
 
 	first, err := r.Create(ctx, newAvatar("u"))
 	require.NoError(t, err)
-	require.NoError(t, r.MarkUploaded(ctx, first.ID, "e"))
+	require.NoError(t, r.MarkUploaded(ctx, first.ID, "e", testEvent()))
 	second, err := r.Create(ctx, newAvatar("u"))
 	require.NoError(t, err)
 	_, err = r.Create(ctx, newAvatar("other"))
@@ -91,7 +95,7 @@ func TestLatestAndList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, latest.ID, "second is not uploaded yet")
 
-	require.NoError(t, r.MarkUploaded(ctx, second.ID, "e"))
+	require.NoError(t, r.MarkUploaded(ctx, second.ID, "e", testEvent()))
 	latest, err = r.GetLatestByUser(ctx, "u")
 	require.NoError(t, err)
 	assert.Equal(t, second.ID, latest.ID)
@@ -113,9 +117,9 @@ func TestSoftDelete(t *testing.T) {
 	ctx := context.Background()
 	a, err := r.Create(ctx, newAvatar("u"))
 	require.NoError(t, err)
-	require.NoError(t, r.MarkUploaded(ctx, a.ID, "e"))
+	require.NoError(t, r.MarkUploaded(ctx, a.ID, "e", testEvent()))
 
-	require.NoError(t, r.SoftDelete(ctx, a.ID))
+	require.NoError(t, r.SoftDelete(ctx, a.ID, testEvent()))
 	_, err = r.Get(ctx, a.ID)
 	assert.ErrorIs(t, err, domain.ErrNotFound)
 	_, err = r.GetLatestByUser(ctx, "u")
@@ -124,7 +128,7 @@ func TestSoftDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, list)
 
-	assert.ErrorIs(t, r.SoftDelete(ctx, a.ID), domain.ErrNotFound)
+	assert.ErrorIs(t, r.SoftDelete(ctx, a.ID, testEvent()), domain.ErrNotFound)
 
 	var deleted bool
 	require.NoError(t, r.pool.QueryRow(ctx, `SELECT deleted_at IS NOT NULL FROM avatars WHERE id = $1`, a.ID).Scan(&deleted))
@@ -156,7 +160,7 @@ func TestCompleteProcessing(t *testing.T) {
 	require.NoError(t, err, "repeated message is not an error")
 	assert.True(t, ok)
 
-	require.NoError(t, r.SoftDelete(ctx, a.ID))
+	require.NoError(t, r.SoftDelete(ctx, a.ID, testEvent()))
 	deletedMsg := uuid.NewString()
 	ok, err = r.CompleteProcessing(ctx, a.ID, keys, deletedMsg)
 	require.NoError(t, err)
