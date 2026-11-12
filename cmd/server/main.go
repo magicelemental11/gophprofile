@@ -20,14 +20,18 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
 	"github.com/magicelemental11/gophprofile/internal/service"
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
+	"github.com/magicelemental11/gophprofile/internal/telemetry"
 )
 
 const (
+	serviceName     = "gophprofile-server"
 	shutdownTimeout = 10 * time.Second
+	flushTimeout    = 5 * time.Second
 	relayInterval   = time.Second
 )
 
-const serviceName = "gophprofile-server"
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	cfg, err := config.LoadServer(os.Args[1:])
@@ -48,6 +52,18 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
+	flushTraces, err := telemetry.Setup(ctx, telemetry.Config{ServiceName: serviceName, Version: version, Endpoint: cfg.OTLPEndpoint})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushTimeout)
+		defer cancel()
+		if err := flushTraces(flushCtx); err != nil {
+			lg.WarnContext(flushCtx, "flush traces", slog.Any("error", err))
+		}
+	}()
+
 	web, err := handlers.NewWeb(os.DirFS(cfg.WebDir))
 	if err != nil {
 		return err

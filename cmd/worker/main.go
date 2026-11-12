@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
 	"github.com/magicelemental11/gophprofile/internal/config"
@@ -17,10 +18,17 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
 	"github.com/magicelemental11/gophprofile/internal/service"
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
+	"github.com/magicelemental11/gophprofile/internal/telemetry"
 	"github.com/magicelemental11/gophprofile/internal/worker"
 )
 
-const serviceName = "gophprofile-worker"
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
+const (
+	serviceName  = "gophprofile-worker"
+	flushTimeout = 5 * time.Second
+)
 
 func main() {
 	cfg, err := config.LoadWorker(os.Args[1:])
@@ -42,6 +50,18 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Worker, lg *slog.Logger) error {
+	flushTraces, err := telemetry.Setup(ctx, telemetry.Config{ServiceName: serviceName, Version: version, Endpoint: cfg.OTLPEndpoint})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushTimeout)
+		defer cancel()
+		if err := flushTraces(flushCtx); err != nil {
+			lg.WarnContext(flushCtx, "flush traces", slog.Any("error", err))
+		}
+	}()
+
 	repo, err := postgres.New(ctx, cfg.DatabaseDSN)
 	if err != nil {
 		return fmt.Errorf("database: %w", err)

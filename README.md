@@ -82,6 +82,7 @@ make run-worker
 | `S3_BUCKET` | `-s3-bucket` | `avatars` | server, worker |
 | `S3_USE_SSL` | `-s3-use-ssl` | `false` | server, worker |
 | `LOG_LEVEL` | `-log-level` | `info` | server, worker |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `-otlp-endpoint` | пусто — трейсы не отправляются | server, worker |
 | `ADDRESS` | `-a` | `:8080` | server |
 | `MAX_UPLOAD_SIZE` | `-max-upload-size` | `10485760` (10 МБ) | server |
 | `WEB_DIR` | `-web-dir` | `./web` | server |

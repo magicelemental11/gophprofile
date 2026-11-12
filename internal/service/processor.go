@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/imaging"
@@ -33,6 +34,13 @@ func NewProcessor(repo AvatarRepository, store ObjectStorage, log *slog.Logger) 
 // exist are skipped, and thumbnails of a deleted avatar are removed, so redelivery is safe.
 // Errors wrapping ErrPermanent must not be retried.
 func (p *Processor) Process(ctx context.Context, messageID string, ev domain.AvatarProcessEvent) error {
+	ctx, span := startSpan(ctx, "process_avatar", attribute.String("avatar_id", ev.AvatarID), attribute.String("messaging.message.id", messageID))
+	err := p.process(ctx, messageID, ev)
+	endSpan(span, err)
+	return err
+}
+
+func (p *Processor) process(ctx context.Context, messageID string, ev domain.AvatarProcessEvent) error {
 	if err := validateIDs(messageID, ev.AvatarID); err != nil {
 		return err
 	}
@@ -146,6 +154,14 @@ func (p *Processor) thumbnails(ctx context.Context, a domain.Avatar, ops []domai
 // to another avatar or an avatar that is not deleted make the message permanently invalid.
 // A repeated message is skipped.
 func (p *Processor) DeleteFiles(ctx context.Context, messageID string, ev domain.AvatarDeleteEvent) error {
+	ctx, span := startSpan(ctx, "delete_files",
+		attribute.String("avatar_id", ev.AvatarID), attribute.String("messaging.message.id", messageID), attribute.Int("keys", len(ev.S3Keys)))
+	err := p.deleteFiles(ctx, messageID, ev)
+	endSpan(span, err)
+	return err
+}
+
+func (p *Processor) deleteFiles(ctx context.Context, messageID string, ev domain.AvatarDeleteEvent) error {
 	if err := validateIDs(messageID, ev.AvatarID); err != nil {
 		return err
 	}

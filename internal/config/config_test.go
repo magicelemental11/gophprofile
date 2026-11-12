@@ -117,3 +117,18 @@ func TestLoadWorkerErrors(t *testing.T) {
 	_, err = LoadWorker(nil)
 	assert.Error(t, err)
 }
+
+func TestLoadOTLPEndpoint(t *testing.T) {
+	cfg, err := LoadWorker(requiredArgs)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.OTLPEndpoint)
+
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4317")
+	srv, err := LoadServer(requiredArgs)
+	require.NoError(t, err)
+	assert.Equal(t, "http://jaeger:4317", srv.OTLPEndpoint)
+
+	srv, err = LoadServer(append([]string{"-otlp-endpoint", "http://collector:4317"}, requiredArgs...))
+	require.NoError(t, err)
+	assert.Equal(t, "http://collector:4317", srv.OTLPEndpoint)
+}

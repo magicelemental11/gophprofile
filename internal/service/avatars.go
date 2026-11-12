@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/imaging"
@@ -46,10 +48,19 @@ func (s *AvatarService) MaxSize() int64 {
 // queued in the outbox together with the uploaded status, so it cannot be lost. If the upload
 // cannot be completed, the stored original is removed and the avatar is marked failed.
 func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error) {
+	ctx, span := startSpan(ctx, "upload_avatar", attribute.String("user_id", userID), attribute.String("file_name", fileName))
+	a, err := s.upload(ctx, userID, fileName, r)
+	endSpan(span, err)
+	return a, err
+}
+
+func (s *AvatarService) upload(ctx context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error) {
+	span := trace.SpanFromContext(ctx)
 	data, err := io.ReadAll(io.LimitReader(r, s.maxSize+1))
 	if err != nil {
 		return domain.Avatar{}, fmt.Errorf("read upload: %w", err)
 	}
+	span.SetAttributes(attribute.Int64("file_size", int64(len(data))))
 	if int64(len(data)) > s.maxSize {
 		return domain.Avatar{}, domain.ErrTooLarge
 	}
@@ -58,7 +69,9 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 		return domain.Avatar{}, err
 	}
 
+	span.SetAttributes(attribute.String("mime_type", info.Format.MIME()))
 	id := uuid.NewString()
+	span.SetAttributes(attribute.String("avatar_id", id))
 	key := domain.OriginalKey(id, info.Format)
 	ev, err := newEvent(domain.RoutingUploaded, domain.AvatarUploadEvent{AvatarID: id, UserID: userID, S3Key: key})
 	if err != nil {
@@ -122,30 +135,43 @@ func newEvent(routingKey string, payload any) (domain.Event, error) {
 
 // Get returns the metadata of a non-deleted avatar.
 func (s *AvatarService) Get(ctx context.Context, id string) (domain.Avatar, error) {
-	return s.repo.Get(ctx, id)
+	ctx, span := startSpan(ctx, "get_avatar_metadata", attribute.String("avatar_id", id))
+	a, err := s.repo.Get(ctx, id)
+	endSpan(span, err)
+	return a, err
 }
 
 // List returns the user's avatars, newest first.
 func (s *AvatarService) List(ctx context.Context, userID string) ([]domain.Avatar, error) {
-	return s.repo.ListByUser(ctx, userID)
+	ctx, span := startSpan(ctx, "list_avatars", attribute.String("user_id", userID))
+	list, err := s.repo.ListByUser(ctx, userID)
+	span.SetAttributes(attribute.Int("avatars", len(list)))
+	endSpan(span, err)
+	return list, err
 }
 
 // Open returns the avatar image in the requested size and format; an empty format keeps the stored one.
 func (s *AvatarService) Open(ctx context.Context, id string, size domain.Size, format domain.Format) (Image, error) {
+	ctx, span := startSpan(ctx, "open_avatar", attribute.String("avatar_id", id), attribute.String("size", string(size)), attribute.String("format", string(format)))
+	var img Image
 	a, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return Image{}, err
+	if err == nil {
+		img, err = s.open(a, size, format)
 	}
-	return s.open(a, size, format)
+	endSpan(span, err)
+	return img, err
 }
 
 // OpenLatest is Open for the user's current avatar.
 func (s *AvatarService) OpenLatest(ctx context.Context, userID string, size domain.Size, format domain.Format) (Image, error) {
+	ctx, span := startSpan(ctx, "open_avatar", attribute.String("user_id", userID), attribute.String("size", string(size)), attribute.String("format", string(format)))
+	var img Image
 	a, err := s.repo.GetLatestByUser(ctx, userID)
-	if err != nil {
-		return Image{}, err
+	if err == nil {
+		img, err = s.open(a, size, format)
 	}
-	return s.open(a, size, format)
+	endSpan(span, err)
+	return img, err
 }
 
 func (s *AvatarService) open(a domain.Avatar, size domain.Size, format domain.Format) (Image, error) {
@@ -185,6 +211,15 @@ type variant struct {
 }
 
 func (s *AvatarService) read(ctx context.Context, v variant) (io.ReadCloser, error) {
+	ctx, span := startSpan(ctx, "read_avatar_image",
+		attribute.String("s3_key", v.key), attribute.String("size", string(v.size)),
+		attribute.String("format", string(v.format)), attribute.Bool("resize", v.resize))
+	body, err := s.readVariant(ctx, v)
+	endSpan(span, err)
+	return body, err
+}
+
+func (s *AvatarService) readVariant(ctx context.Context, v variant) (io.ReadCloser, error) {
 	body, err := s.store.Get(ctx, v.key)
 	if err != nil {
 		return nil, err
@@ -208,15 +243,24 @@ func (s *AvatarService) read(ctx context.Context, v variant) (io.ReadCloser, err
 // Delete soft-deletes the avatar if it belongs to the requester and, in the same transaction,
 // queues the event asking the worker to remove its files.
 func (s *AvatarService) Delete(ctx context.Context, requesterID, avatarID string) error {
+	ctx, span := startSpan(ctx, "delete_avatar", attribute.String("user_id", requesterID), attribute.String("avatar_id", avatarID))
 	a, err := s.repo.Get(ctx, avatarID)
-	if err != nil {
-		return err
+	if err == nil {
+		err = s.delete(ctx, requesterID, a)
 	}
-	return s.delete(ctx, requesterID, a)
+	endSpan(span, err)
+	return err
 }
 
 // DeleteCurrent is Delete for the user's current avatar.
 func (s *AvatarService) DeleteCurrent(ctx context.Context, requesterID, userID string) error {
+	ctx, span := startSpan(ctx, "delete_avatar", attribute.String("user_id", requesterID))
+	err := s.deleteCurrent(ctx, requesterID, userID)
+	endSpan(span, err)
+	return err
+}
+
+func (s *AvatarService) deleteCurrent(ctx context.Context, requesterID, userID string) error {
 	if requesterID != userID {
 		return domain.ErrForbidden
 	}
@@ -224,6 +268,7 @@ func (s *AvatarService) DeleteCurrent(ctx context.Context, requesterID, userID s
 	if err != nil {
 		return err
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("avatar_id", a.ID))
 	return s.delete(ctx, requesterID, a)
 }
 

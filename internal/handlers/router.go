@@ -4,13 +4,21 @@ package handlers
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
-const requestTimeout = 30 * time.Second
+const (
+	requestTimeout = 30 * time.Second
+	unmatchedRoute = "unmatched"
+)
 
 // Deps holds what the router needs to serve requests.
 type Deps struct {
@@ -26,6 +34,7 @@ func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(
 		middleware.RequestID,
+		traceRequests,
 		middleware.ClientIPFromRemoteAddr,
 		logRequests(d.Logger),
 		middleware.Recoverer,
@@ -55,7 +64,28 @@ func NewRouter(d Deps) http.Handler {
 	if d.Web != nil {
 		(&webHandler{api: h, web: d.Web}).mount(r, uploadLimit)
 	}
-	return r
+	return otelhttp.NewHandler(r, "http.server", otelhttp.WithFilter(traced))
+}
+
+func traced(r *http.Request) bool {
+	return r.URL.Path != "/health" && !strings.HasPrefix(r.URL.Path, "/web/static/")
+}
+
+func traceRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		span := trace.SpanFromContext(r.Context())
+		if sc := span.SpanContext(); sc.IsValid() {
+			w.Header().Set("X-Trace-ID", sc.TraceID().String())
+		}
+		span.SetAttributes(attribute.String("http.request_id", middleware.GetReqID(r.Context())))
+		next.ServeHTTP(w, r)
+		route := routePattern(r)
+		if route == unmatchedRoute {
+			return
+		}
+		span.SetName(r.Method + " " + route)
+		span.SetAttributes(semconv.HTTPRoute(route))
+	})
 }
 
 func logRequests(log *slog.Logger) func(http.Handler) http.Handler {
@@ -90,5 +120,5 @@ func routePattern(r *http.Request) string {
 			return p
 		}
 	}
-	return "unmatched"
+	return unmatchedRoute
 }
