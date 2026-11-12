@@ -187,8 +187,8 @@ func (r *Repository) txWithEvent(ctx context.Context, ev domain.Event, sql strin
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO outbox (id, routing_key, payload) VALUES ($1, $2, $3)`,
-		ev.ID, ev.RoutingKey, ev.Payload); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO outbox (id, routing_key, payload, trace_context) VALUES ($1, $2, $3, $4)`,
+		ev.ID, ev.RoutingKey, ev.Payload, injectTrace(ctx)); err != nil {
 		return fmt.Errorf("queue event: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

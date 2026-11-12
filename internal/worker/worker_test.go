@@ -11,9 +11,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/service"
+	"github.com/magicelemental11/gophprofile/internal/telemetry/telemetrytest"
 )
 
 var errTemporary = errors.New("s3 unavailable")
@@ -191,4 +194,21 @@ func TestSleepContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	assert.ErrorIs(t, sleepContext(ctx, time.Hour), context.Canceled)
+}
+
+func TestRetriesAreSpanEvents(t *testing.T) {
+	rec := telemetrytest.Record(t)
+	p := &fakeProcessor{errs: []error{errTemporary, errTemporary, nil}}
+	w, _ := newTestWorker(p, 5)
+	ctx, span := otel.Tracer("test").Start(context.Background(), "process avatars.deletion")
+
+	err := w.Handle(ctx, Message{ID: "m", RoutingKey: domain.RoutingDeleted, Body: body(t, domain.AvatarDeleteEvent{AvatarID: "a1"})})
+	span.End()
+
+	require.NoError(t, err)
+	events := telemetrytest.Ended(t, rec, "process avatars.deletion").Events()
+	require.Len(t, events, 2)
+	assert.Equal(t, "retry", events[0].Name)
+	assert.Contains(t, events[0].Attributes, attribute.Int("attempt", 1))
+	assert.Contains(t, events[1].Attributes, attribute.String("error", errTemporary.Error()))
 }

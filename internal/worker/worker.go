@@ -9,6 +9,9 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/service"
 )
@@ -116,6 +119,11 @@ func (w *Worker) retry(ctx context.Context, log *slog.Logger, fn func() error) e
 		}
 		delay := backoff(attempt)
 		log.WarnContext(ctx, "attempt failed, retrying", slog.Int("attempt", attempt+1), slog.Duration("delay", delay), slog.Any("error", err))
+		trace.SpanFromContext(ctx).AddEvent("retry", trace.WithAttributes(
+			attribute.Int("attempt", attempt+1),
+			attribute.String("delay", delay.String()),
+			attribute.String("error", err.Error()),
+		))
 		if errSleep := w.sleep(ctx, delay); errSleep != nil {
 			return errors.Join(err, errSleep)
 		}

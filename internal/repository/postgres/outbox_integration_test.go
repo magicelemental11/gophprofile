@@ -9,8 +9,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
+	"github.com/magicelemental11/gophprofile/internal/telemetry/telemetrytest"
 )
 
 func collect(t *testing.T, r *Repository, limit int) []domain.Event {
@@ -86,4 +89,24 @@ func TestOutboxRollsBackWithUpdate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.UploadUploading, got.UploadStatus, "status is not changed without its event")
 	assert.Empty(t, collect(t, r, 10))
+}
+
+func TestOutboxKeepsTraceContext(t *testing.T) {
+	rec := telemetrytest.Record(t)
+	r := newTestRepo(t)
+	a, err := r.Create(context.Background(), newAvatar("u"))
+	require.NoError(t, err)
+	ctx, span := otel.Tracer("test").Start(context.Background(), "upload_avatar")
+	require.NoError(t, r.MarkUploaded(ctx, a.ID, "e", testEvent()))
+	span.End()
+
+	var got trace.SpanContext
+	_, err = r.PublishPending(context.Background(), 10, func(ctx context.Context, _ domain.Event) error {
+		got = trace.SpanContextFromContext(ctx)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, span.SpanContext().TraceID(), got.TraceID())
+	tx := telemetrytest.Ended(t, rec, "postgres.mark_uploaded")
+	assert.Equal(t, tx.SpanContext().SpanID(), got.SpanID(), "publishing continues from the transaction that queued the event")
 }

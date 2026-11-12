@@ -15,8 +15,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
+	"github.com/magicelemental11/gophprofile/internal/telemetry/telemetrytest"
 )
 
 var testURL string
@@ -104,4 +107,44 @@ func TestFailedMessageGoesToDeadLetter(t *testing.T) {
 func TestDialBadURL(t *testing.T) {
 	_, err := Dial("amqp://nobody:nothing@127.0.0.1:1/")
 	assert.Error(t, err)
+}
+
+func TestTraceContinuesThroughBroker(t *testing.T) {
+	rec := telemetrytest.Record(t)
+	b, err := Dial(testURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = b.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan trace.SpanContext, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- b.Consume(ctx, QueueDeletion, 1, func(ctx context.Context, _ Message) error {
+			got <- trace.SpanContextFromContext(ctx)
+			return nil
+		})
+	}()
+
+	pubCtx, parent := otel.Tracer("test").Start(context.Background(), "delete_avatar")
+	ev := domain.Event{ID: uuid.NewString(), RoutingKey: domain.RoutingDeleted, Payload: []byte(`{"avatar_id":"a3"}`)}
+	require.NoError(t, b.Publish(pubCtx, ev))
+	parent.End()
+
+	select {
+	case sc := <-got:
+		assert.Equal(t, parent.SpanContext().TraceID(), sc.TraceID())
+	case <-time.After(5 * time.Second):
+		t.Fatal("message not delivered")
+	}
+	cancel()
+	require.NoError(t, <-done)
+
+	publish := telemetrytest.Ended(t, rec, "publish "+Exchange)
+	assert.Equal(t, trace.SpanKindProducer, publish.SpanKind())
+	assert.Equal(t, parent.SpanContext().SpanID(), publish.Parent().SpanID())
+	assert.Equal(t, ev.ID, telemetrytest.Attrs(publish)["messaging.message.id"].AsString())
+	process := telemetrytest.Ended(t, rec, "process "+QueueDeletion)
+	assert.Equal(t, trace.SpanKindConsumer, process.SpanKind())
+	assert.Equal(t, publish.SpanContext().SpanID(), process.Parent().SpanID())
+	assert.Equal(t, domain.RoutingDeleted, telemetrytest.Attrs(process)["messaging.rabbitmq.destination.routing_key"].AsString())
 }
