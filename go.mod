@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/disintegration/imaging v1.6.2
+	github.com/exaring/otelpgx v0.13.0
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/go-chi/cors v1.2.2
 	github.com/go-chi/httprate v0.16.1

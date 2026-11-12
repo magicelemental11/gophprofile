@@ -73,7 +73,7 @@ func (r *Repository) ListByUser(ctx context.Context, userID string) ([]domain.Av
 // MarkUploaded records that the original is stored, saves its ETag and queues ev in the outbox,
 // all in one transaction.
 func (r *Repository) MarkUploaded(ctx context.Context, id, etag string, ev domain.Event) error {
-	return r.execWithEvent(ctx, ev, `UPDATE avatars SET upload_status = $2, etag = $3, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+	return r.execWithEvent(ctx, "mark_uploaded", ev, `UPDATE avatars SET upload_status = $2, etag = $3, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
 		id, domain.UploadUploaded, etag)
 }
 
@@ -91,6 +91,13 @@ func (r *Repository) SetProcessingStatus(ctx context.Context, id string, s domai
 // in one transaction. It reports false and leaves the message unrecorded when the avatar was
 // deleted meanwhile, so cleanup can be retried.
 func (r *Repository) CompleteProcessing(ctx context.Context, id string, keys map[domain.Size]string, messageID string) (bool, error) {
+	ctx, span := startTx(ctx, "complete_processing", id)
+	ok, err := r.completeProcessing(ctx, id, keys, messageID)
+	endTx(span, err)
+	return ok, err
+}
+
+func (r *Repository) completeProcessing(ctx context.Context, id string, keys map[domain.Size]string, messageID string) (bool, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin: %w", err)
@@ -117,7 +124,7 @@ func (r *Repository) CompleteProcessing(ctx context.Context, id string, keys map
 
 // SoftDelete marks the avatar deleted and queues ev in the outbox in one transaction.
 func (r *Repository) SoftDelete(ctx context.Context, id string, ev domain.Event) error {
-	return r.execWithEvent(ctx, ev, `UPDATE avatars SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, id)
+	return r.execWithEvent(ctx, "soft_delete", ev, `UPDATE avatars SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, id)
 }
 
 // IsProcessed reports whether a message with this id was handled before.
@@ -156,7 +163,14 @@ func (r *Repository) exec(ctx context.Context, sql string, id string, args ...an
 	return nil
 }
 
-func (r *Repository) execWithEvent(ctx context.Context, ev domain.Event, sql string, id string, args ...any) error {
+func (r *Repository) execWithEvent(ctx context.Context, op string, ev domain.Event, sql string, id string, args ...any) error {
+	ctx, span := startTx(ctx, op, id)
+	err := r.txWithEvent(ctx, ev, sql, id, args...)
+	endTx(span, err)
+	return err
+}
+
+func (r *Repository) txWithEvent(ctx context.Context, ev domain.Event, sql string, id string, args ...any) error {
 	if !validUUID(id) {
 		return domain.ErrNotFound
 	}

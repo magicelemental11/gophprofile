@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
+	"github.com/magicelemental11/gophprofile/internal/telemetry/telemetrytest"
 )
 
 const (
@@ -323,4 +324,25 @@ func TestProcessedMessagesQueries(t *testing.T) {
 
 	db.expect(result{err: errDB})
 	assert.ErrorIs(t, r.MarkProcessed(ctx, messageID), errDB)
+}
+
+func TestTransactionSpans(t *testing.T) {
+	rec := telemetrytest.Record(t)
+	r, db := newFakeRepo(t)
+	for range 3 {
+		db.expect(result{affected: 0})
+	}
+	ctx := context.Background()
+	id := avatarID
+	ev := domain.Event{ID: messageID, RoutingKey: domain.RoutingDeleted}
+
+	_ = r.MarkUploaded(ctx, id, `"e"`, ev)
+	_ = r.SoftDelete(ctx, id, ev)
+	_, _ = r.CompleteProcessing(ctx, id, nil, messageID)
+
+	for _, name := range []string{"postgres.mark_uploaded", "postgres.soft_delete", "postgres.complete_processing"} {
+		s := telemetrytest.Ended(t, rec, name)
+		assert.Equal(t, "postgresql", telemetrytest.Attrs(s)["db.system.name"].AsString(), name)
+		assert.Equal(t, id, telemetrytest.Attrs(s)["avatar_id"].AsString(), name)
+	}
 }

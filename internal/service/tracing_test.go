@@ -10,42 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/magicelemental11/gophprofile/internal/telemetry/telemetrytest"
 )
 
-func recordSpans(t *testing.T) *tracetest.SpanRecorder {
-	t.Helper()
-	rec := tracetest.NewSpanRecorder()
-	prev := otel.GetTracerProvider()
-	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
-	t.Cleanup(func() { otel.SetTracerProvider(prev) })
-	return rec
-}
-
-func spanNamed(t *testing.T, rec *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	require.Failf(t, "span not found", "no ended span %q", name)
-	return nil
-}
-
-func attrs(s sdktrace.ReadOnlySpan) map[attribute.Key]attribute.Value {
-	m := map[attribute.Key]attribute.Value{}
-	for _, kv := range s.Attributes() {
-		m[kv.Key] = kv.Value
-	}
-	return m
-}
-
 func TestUploadSpan(t *testing.T) {
-	rec := recordSpans(t)
+	rec := telemetrytest.Record(t)
 	e := newEnv()
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "POST /api/v1/avatars")
 	data := pngBytes(t, 20, 10)
@@ -54,10 +25,10 @@ func TestUploadSpan(t *testing.T) {
 	require.NoError(t, err)
 	parent.End()
 
-	s := spanNamed(t, rec, "upload_avatar")
+	s := telemetrytest.Ended(t, rec, "upload_avatar")
 	assert.Equal(t, parent.SpanContext().SpanID(), s.Parent().SpanID())
 	assert.Equal(t, codes.Unset, s.Status().Code)
-	got := attrs(s)
+	got := telemetrytest.Attrs(s)
 	assert.Equal(t, "gopher@example.com", got["user_id"].AsString())
 	assert.Equal(t, "cat.png", got["file_name"].AsString())
 	assert.Equal(t, int64(len(data)), got["file_size"].AsInt64())
@@ -66,7 +37,7 @@ func TestUploadSpan(t *testing.T) {
 }
 
 func TestUploadSpanErrors(t *testing.T) {
-	rec := recordSpans(t)
+	rec := telemetrytest.Record(t)
 	e := newEnv()
 
 	_, err := e.svc.Upload(context.Background(), "u", "x.txt", strings.NewReader("not an image"))
@@ -78,31 +49,31 @@ func TestUploadSpanErrors(t *testing.T) {
 	ended := rec.Ended()
 	require.Len(t, ended, 2)
 	assert.Equal(t, codes.Unset, ended[0].Status().Code, "invalid format is the client's fault")
-	assert.Equal(t, "client", attrs(ended[0])["error.kind"].AsString())
+	assert.Equal(t, "client", telemetrytest.Attrs(ended[0])["error.kind"].AsString())
 	assert.Equal(t, codes.Error, ended[1].Status().Code)
 }
 
 func TestDeleteSpan(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
-	rec := recordSpans(t)
+	rec := telemetrytest.Record(t)
 
 	require.NoError(t, e.svc.Delete(context.Background(), "u", a.ID))
 
-	s := spanNamed(t, rec, "delete_avatar")
-	assert.Equal(t, a.ID, attrs(s)["avatar_id"].AsString())
-	assert.Equal(t, "u", attrs(s)["user_id"].AsString())
+	s := telemetrytest.Ended(t, rec, "delete_avatar")
+	assert.Equal(t, a.ID, telemetrytest.Attrs(s)["avatar_id"].AsString())
+	assert.Equal(t, "u", telemetrytest.Attrs(s)["user_id"].AsString())
 }
 
 func TestProcessSpan(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
-	rec := recordSpans(t)
+	rec := telemetrytest.Record(t)
 	msg := uuid.NewString()
 
 	require.NoError(t, newProcessor(e).Process(context.Background(), msg, processEvent(a.ID)))
 
-	s := spanNamed(t, rec, "process_avatar")
-	assert.Equal(t, a.ID, attrs(s)["avatar_id"].AsString())
-	assert.Equal(t, msg, attrs(s)["messaging.message.id"].AsString())
+	s := telemetrytest.Ended(t, rec, "process_avatar")
+	assert.Equal(t, a.ID, telemetrytest.Attrs(s)["avatar_id"].AsString())
+	assert.Equal(t, msg, telemetrytest.Attrs(s)["messaging.message.id"].AsString())
 }
