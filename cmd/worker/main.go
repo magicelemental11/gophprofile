@@ -6,11 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
 	"github.com/magicelemental11/gophprofile/internal/config"
@@ -21,27 +20,28 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/worker"
 )
 
+const serviceName = "gophprofile-worker"
+
 func main() {
 	cfg, err := config.LoadWorker(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
 	}
-	lg, err := logger.New(cfg.LogLevel)
+	lg, err := logger.New(os.Stdout, cfg.LogLevel, serviceName)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func() { _ = lg.Sync() }()
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	if err := run(ctx, cfg, lg); err != nil {
-		lg.Fatal("worker stopped", zap.Error(err))
+	err = run(ctx, cfg, lg)
+	stop()
+	if err != nil {
+		lg.Error("worker stopped", slog.Any("error", err))
+		os.Exit(1)
 	}
 	lg.Info("worker stopped")
 }
 
-func run(ctx context.Context, cfg config.Worker, lg *zap.Logger) error {
+func run(ctx context.Context, cfg config.Worker, lg *slog.Logger) error {
 	repo, err := postgres.New(ctx, cfg.DatabaseDSN)
 	if err != nil {
 		return fmt.Errorf("database: %w", err)
@@ -73,7 +73,7 @@ func run(ctx context.Context, cfg config.Worker, lg *zap.Logger) error {
 	for _, q := range queues {
 		go func() { errCh <- broker.Consume(ctx, q, cfg.Prefetch, handle) }()
 	}
-	lg.Info("worker started", zap.Strings("queues", queues))
+	lg.InfoContext(ctx, "worker started", slog.Any("queues", queues))
 
 	var runErr error
 	select {

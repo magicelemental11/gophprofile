@@ -6,13 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
 	"github.com/magicelemental11/gophprofile/internal/config"
@@ -28,26 +27,27 @@ const (
 	relayInterval   = time.Second
 )
 
+const serviceName = "gophprofile-server"
+
 func main() {
 	cfg, err := config.LoadServer(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
 	}
-	lg, err := logger.New(cfg.LogLevel)
+	lg, err := logger.New(os.Stdout, cfg.LogLevel, serviceName)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func() { _ = lg.Sync() }()
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	if err := run(ctx, cfg, lg); err != nil {
-		lg.Fatal("server stopped", zap.Error(err))
+	err = run(ctx, cfg, lg)
+	stop()
+	if err != nil {
+		lg.Error("server stopped", slog.Any("error", err))
+		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
+func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
 	web, err := handlers.NewWeb(os.DirFS(cfg.WebDir))
 	if err != nil {
 		return err
@@ -100,7 +100,7 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 	closed := broker.NotifyClose()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	lg.Info("server started", zap.String("address", cfg.Address))
+	lg.InfoContext(ctx, "server started", slog.String("address", cfg.Address))
 
 	var runErr error
 	select {
@@ -113,7 +113,7 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 		}
 	case <-ctx.Done():
 	}
-	lg.Info("shutting down")
+	lg.InfoContext(ctx, "shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

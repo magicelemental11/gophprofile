@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
@@ -25,7 +25,7 @@ func serveWeb(t *testing.T, svc *fakeService, req *http.Request) *httptest.Respo
 	web, err := NewWeb(testWebFS)
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
-	NewRouter(Deps{Logger: zap.NewNop(), Avatars: svc, Web: web}).ServeHTTP(rec, req)
+	NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Avatars: svc, Web: web}).ServeHTTP(rec, req)
 	return rec
 }
 

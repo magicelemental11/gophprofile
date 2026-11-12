@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/service"
@@ -111,7 +111,7 @@ func (f *fakeService) DeleteCurrent(_ context.Context, requesterID, userID strin
 
 func serve(svc *fakeService, req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	NewRouter(Deps{Logger: zap.NewNop(), Avatars: svc}).ServeHTTP(rec, req)
+	NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Avatars: svc}).ServeHTTP(rec, req)
 	return rec
 }
 

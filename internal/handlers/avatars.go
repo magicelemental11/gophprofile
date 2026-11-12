@@ -5,13 +5,13 @@ import (
 	_ "embed"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/service"
@@ -36,7 +36,7 @@ type AvatarService interface {
 
 type api struct {
 	svc AvatarService
-	log *zap.Logger
+	log *slog.Logger
 }
 
 type uploadResponse struct {
@@ -128,7 +128,7 @@ func (h *api) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	a, err := h.receive(w, r, uid)
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", avatarURL(a.ID))
@@ -180,12 +180,12 @@ func parseVariant(r *http.Request) (domain.Size, domain.Format, error) {
 func (h *api) image(w http.ResponseWriter, r *http.Request) {
 	size, format, err := parseVariant(r)
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	img, err := h.svc.Open(r.Context(), pathParam(r, "id"), size, format)
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	h.sendImage(w, r, img)
@@ -194,7 +194,7 @@ func (h *api) image(w http.ResponseWriter, r *http.Request) {
 func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
 	size, format, err := parseVariant(r)
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	img, err := h.svc.OpenLatest(r.Context(), pathParam(r, "user_id"), size, format)
@@ -206,7 +206,7 @@ func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	h.sendImage(w, r, img)
@@ -224,13 +224,13 @@ func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Imag
 	}
 	body, err := img.Open(r.Context())
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	defer body.Close()
 	setImageHeaders(w, img)
 	if _, err := io.Copy(w, body); err != nil {
-		h.log.Warn("send image", zap.Error(err))
+		h.log.WarnContext(r.Context(), "send image", slog.Any("error", err))
 	}
 }
 
@@ -258,7 +258,7 @@ func etagMatches(header, etag string) bool {
 func (h *api) metadata(w http.ResponseWriter, r *http.Request) {
 	a, err := h.svc.Get(r.Context(), pathParam(r, "id"))
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, metadata(a))
@@ -267,7 +267,7 @@ func (h *api) metadata(w http.ResponseWriter, r *http.Request) {
 func (h *api) list(w http.ResponseWriter, r *http.Request) {
 	avatars, err := h.svc.List(r.Context(), pathParam(r, "user_id"))
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	resp := make([]metadataResponse, 0, len(avatars))
@@ -282,7 +282,7 @@ func (h *api) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.respondDeleted(w, h.svc.Delete(r.Context(), uid, pathParam(r, "id")))
+	h.respondDeleted(w, r, h.svc.Delete(r.Context(), uid, pathParam(r, "id")))
 }
 
 func (h *api) deleteCurrent(w http.ResponseWriter, r *http.Request) {
@@ -290,23 +290,23 @@ func (h *api) deleteCurrent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.respondDeleted(w, h.svc.DeleteCurrent(r.Context(), uid, pathParam(r, "user_id")))
+	h.respondDeleted(w, r, h.svc.DeleteCurrent(r.Context(), uid, pathParam(r, "user_id")))
 }
 
-func (h *api) respondDeleted(w http.ResponseWriter, err error) {
+func (h *api) respondDeleted(w http.ResponseWriter, r *http.Request, err error) {
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *api) fail(w http.ResponseWriter, err error) {
-	code, body := h.classify(err)
+func (h *api) fail(w http.ResponseWriter, r *http.Request, err error) {
+	code, body := h.classify(r.Context(), err)
 	writeJSON(w, code, body)
 }
 
-func (h *api) classify(err error) (int, errorBody) {
+func (h *api) classify(ctx context.Context, err error) (int, errorBody) {
 	var tooLarge *http.MaxBytesError
 	switch {
 	case errors.Is(err, domain.ErrTooLarge), errors.As(err, &tooLarge):
@@ -324,7 +324,7 @@ func (h *api) classify(err error) (int, errorBody) {
 	case errors.Is(err, domain.ErrForbidden):
 		return http.StatusForbidden, errorBody{Error: "Forbidden", Details: "You can only delete your own avatars"}
 	default:
-		h.log.Error("request failed", zap.Error(err))
+		h.log.ErrorContext(ctx, "request failed", slog.Any("error", err))
 		return http.StatusInternalServerError, errorBody{Error: "Internal server error"}
 	}
 }

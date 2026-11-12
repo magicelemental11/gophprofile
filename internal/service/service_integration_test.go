@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"log/slog"
 	"testing"
 
 	"github.com/google/uuid"
@@ -16,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/config"
 	"github.com/magicelemental11/gophprofile/internal/domain"
@@ -93,8 +93,8 @@ func assertObject(t *testing.T, store *s3.Storage, key string, exists bool) {
 func TestAvatarLifecycle(t *testing.T) {
 	ctx := context.Background()
 	repo, store := startDeps(t)
-	svc := service.NewAvatarService(repo, store, zap.NewNop(), 10<<20)
-	proc := service.NewProcessor(repo, store, zap.NewNop())
+	svc := service.NewAvatarService(repo, store, slog.New(slog.DiscardHandler), 10<<20)
+	proc := service.NewProcessor(repo, store, slog.New(slog.DiscardHandler))
 
 	a, err := svc.Upload(ctx, "gopher@example.com", "cat.png", bytes.NewReader(pngImage(t)))
 	require.NoError(t, err)

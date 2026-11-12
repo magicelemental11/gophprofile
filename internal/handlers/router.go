@@ -2,19 +2,19 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"go.uber.org/zap"
 )
 
 const requestTimeout = 30 * time.Second
 
 // Deps holds what the router needs to serve requests.
 type Deps struct {
-	Logger   *zap.Logger
+	Logger   *slog.Logger
 	Health   map[string]Pinger
 	Avatars  AvatarService
 	Web      *Web
@@ -58,25 +58,37 @@ func NewRouter(d Deps) http.Handler {
 	return r
 }
 
-func logRequests(log *zap.Logger) func(http.Handler) http.Handler {
+func logRequests(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			start := time.Now()
 			next.ServeHTTP(ww, r)
-			fields := []zap.Field{
-				zap.String("method", r.Method),
-				zap.String("path", r.URL.Path),
-				zap.Int("status", ww.Status()),
-				zap.Int("bytes", ww.BytesWritten()),
-				zap.Duration("duration", time.Since(start)),
-				zap.String("request_id", middleware.GetReqID(r.Context())),
+			level := slog.LevelInfo
+			switch {
+			case ww.Status() >= http.StatusInternalServerError:
+				level = slog.LevelError
+			case ww.Status() >= http.StatusBadRequest:
+				level = slog.LevelWarn
 			}
-			if ww.Status() >= http.StatusInternalServerError {
-				log.Error("request", fields...)
-				return
-			}
-			log.Info("request", fields...)
+			log.LogAttrs(r.Context(), level, "request",
+				slog.String("method", r.Method),
+				slog.String("route", routePattern(r)),
+				slog.String("path", r.URL.Path),
+				slog.Int("status", ww.Status()),
+				slog.Int("bytes", ww.BytesWritten()),
+				slog.Duration("duration", time.Since(start)),
+				slog.String("request_id", middleware.GetReqID(r.Context())),
+			)
 		})
 	}
+}
+
+func routePattern(r *http.Request) string {
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		if p := rc.RoutePattern(); p != "" {
+			return p
+		}
+	}
+	return "unmatched"
 }

@@ -5,10 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/imaging"
@@ -21,11 +21,11 @@ var ErrPermanent = errors.New("permanent failure")
 type Processor struct {
 	repo  AvatarRepository
 	store ObjectStorage
-	log   *zap.Logger
+	log   *slog.Logger
 }
 
 // NewProcessor wires the processor to its ports.
-func NewProcessor(repo AvatarRepository, store ObjectStorage, log *zap.Logger) *Processor {
+func NewProcessor(repo AvatarRepository, store ObjectStorage, log *slog.Logger) *Processor {
 	return &Processor{repo: repo, store: store, log: log}
 }
 
@@ -47,7 +47,7 @@ func (p *Processor) Process(ctx context.Context, messageID string, ev domain.Ava
 	}
 	a, err := p.repo.Get(ctx, ev.AvatarID)
 	if errors.Is(err, domain.ErrNotFound) {
-		p.log.Info("skip processing of missing avatar", zap.String("avatar_id", ev.AvatarID))
+		p.log.InfoContext(ctx, "skip processing of missing avatar", slog.String("avatar_id", ev.AvatarID))
 		return p.removeThumbnails(ctx, ev.AvatarID)
 	}
 	if err != nil {
@@ -62,7 +62,7 @@ func (p *Processor) Process(ctx context.Context, messageID string, ev domain.Ava
 
 	err = p.repo.SetProcessingStatus(ctx, a.ID, domain.ProcessingProcessing)
 	if errors.Is(err, domain.ErrNotFound) {
-		p.log.Info("avatar deleted before processing", zap.String("avatar_id", a.ID))
+		p.log.InfoContext(ctx, "avatar deleted before processing", slog.String("avatar_id", a.ID))
 		return p.removeThumbnails(ctx, a.ID)
 	}
 	if err != nil {
@@ -77,7 +77,7 @@ func (p *Processor) Process(ctx context.Context, messageID string, ev domain.Ava
 		return err
 	}
 	if !ok {
-		p.log.Info("avatar deleted during processing", zap.String("avatar_id", a.ID))
+		p.log.InfoContext(ctx, "avatar deleted during processing", slog.String("avatar_id", a.ID))
 		return p.removeThumbnails(ctx, a.ID)
 	}
 	return nil

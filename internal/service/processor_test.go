@@ -4,19 +4,19 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/imaging"
 )
 
 func newProcessor(e *env) *Processor {
-	return NewProcessor(e.repo, e.store, zap.NewNop())
+	return NewProcessor(e.repo, e.store, slog.New(slog.DiscardHandler))
 }
 
 func processEvent(id string) domain.AvatarProcessEvent {
@@ -126,7 +126,7 @@ func TestProcessDeletedMeanwhileRemovesThumbnails(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
 	repo := &deleteOnComplete{fakeRepo: e.repo}
-	p := NewProcessor(repo, e.store, zap.NewNop())
+	p := NewProcessor(repo, e.store, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
 	for _, s := range domain.ThumbnailSizes {
@@ -138,7 +138,7 @@ func TestProcessDeletedMeanwhileRetriesCleanup(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
 	repo := &deleteOnComplete{fakeRepo: e.repo}
-	p := NewProcessor(repo, e.store, zap.NewNop())
+	p := NewProcessor(repo, e.store, slog.New(slog.DiscardHandler))
 	msg := uuid.NewString()
 
 	e.store.delErr = errBoom
@@ -292,7 +292,7 @@ func TestProcessRejectsInvalidAvatarID(t *testing.T) {
 func TestProcessDeletedBeforeStatusUpdate(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
-	p := NewProcessor(&deleteOnStatus{fakeRepo: e.repo}, e.store, zap.NewNop())
+	p := NewProcessor(&deleteOnStatus{fakeRepo: e.repo}, e.store, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), "no retry for a deleted avatar")
 	assert.Zero(t, e.store.puts-1, "no thumbnails uploaded")

@@ -2,13 +2,13 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
@@ -26,7 +26,7 @@ func TestRelayDrainsFullBatches(t *testing.T) {
 	repo, pub := newFakeRepo(), &fakePublisher{}
 	events := queueEvents(repo, relayBatch*2+1)
 
-	NewRelay(repo, pub, zap.NewNop(), time.Hour).drain(context.Background())
+	NewRelay(repo, pub, slog.New(slog.DiscardHandler), time.Hour).drain(context.Background())
 
 	assert.Equal(t, events, pub.published())
 	assert.Empty(t, repo.queued())
@@ -35,7 +35,7 @@ func TestRelayDrainsFullBatches(t *testing.T) {
 func TestRelayKeepsFailedEvents(t *testing.T) {
 	repo, pub := newFakeRepo(), &fakePublisher{fails: 1}
 	events := queueEvents(repo, 2)
-	r := NewRelay(repo, pub, zap.NewNop(), time.Hour)
+	r := NewRelay(repo, pub, slog.New(slog.DiscardHandler), time.Hour)
 
 	r.drain(context.Background())
 	assert.Empty(t, pub.published())
@@ -51,7 +51,7 @@ func TestRelayRepoFailure(t *testing.T) {
 	queueEvents(repo, 1)
 	repo.failNext = errBoom
 
-	NewRelay(repo, pub, zap.NewNop(), time.Hour).drain(context.Background())
+	NewRelay(repo, pub, slog.New(slog.DiscardHandler), time.Hour).drain(context.Background())
 	assert.Empty(t, pub.published())
 	assert.Len(t, repo.queued(), 1)
 }
@@ -61,7 +61,7 @@ func TestRelayRunPublishesUntilCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		NewRelay(repo, pub, zap.NewNop(), 5*time.Millisecond).Run(ctx)
+		NewRelay(repo, pub, slog.New(slog.DiscardHandler), 5*time.Millisecond).Run(ctx)
 		close(done)
 	}()
 
@@ -82,7 +82,7 @@ func TestUploadEventReachesBroker(t *testing.T) {
 	a := e.upload(t, "u")
 	pub := &fakePublisher{}
 
-	NewRelay(e.repo, pub, zap.NewNop(), time.Hour).drain(context.Background())
+	NewRelay(e.repo, pub, slog.New(slog.DiscardHandler), time.Hour).drain(context.Background())
 
 	events := pub.published()
 	require.Len(t, events, 1)

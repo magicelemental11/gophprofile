@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/imaging"
@@ -28,12 +28,12 @@ type Image struct {
 type AvatarService struct {
 	repo    AvatarRepository
 	store   ObjectStorage
-	log     *zap.Logger
+	log     *slog.Logger
 	maxSize int64
 }
 
 // NewAvatarService wires the service to its ports; maxSize limits an upload in bytes.
-func NewAvatarService(repo AvatarRepository, store ObjectStorage, log *zap.Logger, maxSize int64) *AvatarService {
+func NewAvatarService(repo AvatarRepository, store ObjectStorage, log *slog.Logger, maxSize int64) *AvatarService {
 	return &AvatarService{repo: repo, store: store, log: log, maxSize: maxSize}
 }
 
@@ -91,18 +91,24 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 		return domain.Avatar{}, err
 	}
 	a.UploadStatus, a.ETag = domain.UploadUploaded, etag
+	s.log.InfoContext(ctx, "avatar uploaded",
+		slog.String("avatar_id", a.ID),
+		slog.String("user_id", a.UserID),
+		slog.Int64("file_size", a.SizeBytes),
+		slog.String("mime_type", a.MimeType),
+	)
 	return a, nil
 }
 
 func (s *AvatarService) markUploadFailed(ctx context.Context, id string) {
 	if err := s.repo.SetUploadStatus(context.WithoutCancel(ctx), id, domain.UploadFailed); err != nil {
-		s.log.Error("mark upload failed", zap.String("avatar_id", id), zap.Error(err))
+		s.log.ErrorContext(ctx, "mark upload failed", slog.String("avatar_id", id), slog.Any("error", err))
 	}
 }
 
 func (s *AvatarService) discardOriginal(ctx context.Context, a domain.Avatar) {
 	if err := s.store.Delete(context.WithoutCancel(ctx), []string{a.S3Key}); err != nil {
-		s.log.Error("remove original of unfinished upload", zap.String("avatar_id", a.ID), zap.Error(err))
+		s.log.ErrorContext(ctx, "remove original of unfinished upload", slog.String("avatar_id", a.ID), slog.Any("error", err))
 	}
 }
 
@@ -229,5 +235,9 @@ func (s *AvatarService) delete(ctx context.Context, requesterID string, a domain
 	if err != nil {
 		return err
 	}
-	return s.repo.SoftDelete(ctx, a.ID, ev)
+	if err := s.repo.SoftDelete(ctx, a.ID, ev); err != nil {
+		return err
+	}
+	s.log.InfoContext(ctx, "avatar deleted", slog.String("avatar_id", a.ID), slog.String("user_id", a.UserID))
+	return nil
 }

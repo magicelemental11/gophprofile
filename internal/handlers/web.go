@@ -7,12 +7,12 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
@@ -66,19 +66,19 @@ func (h *webHandler) mount(r chi.Router, uploadLimit func(http.Handler) http.Han
 	r.Handle("/web/static/*", h.web.static)
 }
 
-func (h *webHandler) index(w http.ResponseWriter, _ *http.Request) {
-	h.render(w, http.StatusOK, pageData{})
+func (h *webHandler) index(w http.ResponseWriter, r *http.Request) {
+	h.render(w, r, http.StatusOK, pageData{})
 }
 
 func (h *webHandler) upload(w http.ResponseWriter, r *http.Request) {
 	uid, err := h.receiveForm(w, r)
 	switch {
 	case errors.Is(err, errNoUser):
-		h.render(w, http.StatusBadRequest, pageData{Error: "Missing user ID"})
+		h.render(w, r, http.StatusBadRequest, pageData{Error: "Missing user ID"})
 	case errors.Is(err, errInvalidUser):
-		h.render(w, http.StatusBadRequest, pageData{UserID: uid, Error: "Invalid user ID"})
+		h.render(w, r, http.StatusBadRequest, pageData{UserID: uid, Error: "Invalid user ID"})
 	case err != nil:
-		h.failPage(w, uid, err)
+		h.failPage(w, r, uid, err)
 	default:
 		http.Redirect(w, r, "/web/gallery/"+url.PathEscape(uid), http.StatusSeeOther)
 	}
@@ -126,19 +126,19 @@ func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request) (string
 	}
 }
 
-func (h *webHandler) failPage(w http.ResponseWriter, uid string, err error) {
-	code, body := h.classify(err)
+func (h *webHandler) failPage(w http.ResponseWriter, r *http.Request, uid string, err error) {
+	code, body := h.classify(r.Context(), err)
 	msg := body.Error
 	if body.Details != "" {
 		msg += ": " + body.Details
 	}
-	h.render(w, code, pageData{UserID: uid, Error: msg})
+	h.render(w, r, code, pageData{UserID: uid, Error: msg})
 }
 
-func (h *webHandler) render(w http.ResponseWriter, code int, data pageData) {
+func (h *webHandler) render(w http.ResponseWriter, r *http.Request, code int, data pageData) {
 	var buf bytes.Buffer
 	if err := h.web.page.Execute(&buf, data); err != nil {
-		h.log.Error("render page", zap.Error(err))
+		h.log.ErrorContext(r.Context(), "render page", slog.Any("error", err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

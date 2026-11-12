@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/service"
@@ -66,7 +66,7 @@ func (r *recordedSleeps) sleep(ctx context.Context, d time.Duration) error {
 }
 
 func newTestWorker(p *fakeProcessor, maxRetries int) (*Worker, *recordedSleeps) {
-	w := New(p, zap.NewNop(), maxRetries)
+	w := New(p, slog.New(slog.DiscardHandler), maxRetries)
 	s := &recordedSleeps{}
 	w.sleep = s.sleep
 	return w, s

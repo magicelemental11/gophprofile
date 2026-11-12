@@ -8,7 +8,13 @@ linters:
     - gosec
     - misspell
     - revive
+    - sloglint
   settings:
+    sloglint:
+      no-mixed-args: true
+      context: scope
+      static-msg: true
+      key-naming-case: snake
     revive:
       rules:
         - name: exported
