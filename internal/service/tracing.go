@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -19,14 +18,5 @@ func startSpan(ctx context.Context, name string, attrs ...attribute.KeyValue) (c
 }
 
 func endSpan(span trace.Span, err error) {
-	telemetry.End(span, err, isClientError)
-}
-
-func isClientError(err error) bool {
-	for _, target := range []error{domain.ErrNotFound, domain.ErrForbidden, domain.ErrInvalidFormat, domain.ErrTooLarge, domain.ErrInvalidParam} {
-		if errors.Is(err, target) {
-			return true
-		}
-	}
-	return false
+	telemetry.End(span, err, domain.IsClientError)
 }

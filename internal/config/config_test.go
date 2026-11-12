@@ -132,3 +132,18 @@ func TestLoadOTLPEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "http://collector:4317", srv.OTLPEndpoint)
 }
+
+func TestLoadMetricsAddress(t *testing.T) {
+	srv, err := LoadServer(requiredArgs)
+	require.NoError(t, err)
+	assert.Equal(t, ":9091", srv.MetricsAddress)
+
+	t.Setenv("METRICS_ADDRESS", ":9200")
+	w, err := LoadWorker(requiredArgs)
+	require.NoError(t, err)
+	assert.Equal(t, ":9200", w.MetricsAddress)
+
+	w, err = LoadWorker(append([]string{"-metrics-address", ":9300"}, requiredArgs...))
+	require.NoError(t, err)
+	assert.Equal(t, ":9300", w.MetricsAddress)
+}

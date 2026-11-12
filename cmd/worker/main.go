@@ -15,6 +15,7 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
 	"github.com/magicelemental11/gophprofile/internal/config"
 	"github.com/magicelemental11/gophprofile/internal/logger"
+	"github.com/magicelemental11/gophprofile/internal/metrics"
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
 	"github.com/magicelemental11/gophprofile/internal/service"
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
@@ -80,7 +81,16 @@ func run(ctx context.Context, cfg config.Worker, lg *slog.Logger) error {
 	}
 	defer func() { _ = broker.Close() }()
 
-	w := worker.New(service.NewProcessor(repo, store, lg), lg, cfg.MaxRetries)
+	m := metrics.New()
+	if err := m.Register(metrics.NewPoolCollector(func() metrics.PoolStat { return repo.PoolStat() })); err != nil {
+		return err
+	}
+	metricsCtx, stopMetrics := context.WithCancel(ctx)
+	defer stopMetrics()
+	metricsErr := make(chan error, 1)
+	go func() { metricsErr <- metrics.Serve(metricsCtx, cfg.MetricsAddress, m.Handler()) }()
+
+	w := worker.New(service.NewProcessor(repo, store, lg), m, lg, cfg.MaxRetries)
 	handle := func(ctx context.Context, m rabbitmq.Message) error {
 		return w.Handle(ctx, worker.Message{ID: m.ID, RoutingKey: m.RoutingKey, Body: m.Body})
 	}
@@ -105,6 +115,7 @@ func run(ctx context.Context, cfg config.Worker, lg *slog.Logger) error {
 		}
 	case runErr = <-errCh:
 		queues = queues[1:]
+	case runErr = <-metricsErr:
 	}
 	cancel()
 	for range queues {

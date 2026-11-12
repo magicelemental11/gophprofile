@@ -20,6 +20,7 @@ import (
 
 	"github.com/magicelemental11/gophprofile/internal/config"
 	"github.com/magicelemental11/gophprofile/internal/domain"
+	"github.com/magicelemental11/gophprofile/internal/metrics"
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
 	"github.com/magicelemental11/gophprofile/internal/service"
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
@@ -93,7 +94,7 @@ func assertObject(t *testing.T, store *s3.Storage, key string, exists bool) {
 func TestAvatarLifecycle(t *testing.T) {
 	ctx := context.Background()
 	repo, store := startDeps(t)
-	svc := service.NewAvatarService(repo, store, slog.New(slog.DiscardHandler), 10<<20)
+	svc := service.NewAvatarService(repo, store, metrics.New(), slog.New(slog.DiscardHandler), 10<<20)
 	proc := service.NewProcessor(repo, store, slog.New(slog.DiscardHandler))
 
 	a, err := svc.Upload(ctx, "gopher@example.com", "cat.png", bytes.NewReader(pngImage(t)))

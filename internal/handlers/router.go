@@ -2,6 +2,7 @@
 package handlers
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -20,9 +21,16 @@ const (
 	unmatchedRoute = "unmatched"
 )
 
-// Deps holds what the router needs to serve requests.
+// RequestObserver records served requests for monitoring.
+type RequestObserver interface {
+	RequestStarted()
+	RequestFinished(ctx context.Context, method, route string, code int, d time.Duration)
+}
+
+// Deps holds what the router needs to serve requests; Metrics may be nil.
 type Deps struct {
 	Logger   *slog.Logger
+	Metrics  RequestObserver
 	Health   map[string]Pinger
 	Avatars  AvatarService
 	Web      *Web
@@ -36,7 +44,7 @@ func NewRouter(d Deps) http.Handler {
 		middleware.RequestID,
 		traceRequests,
 		middleware.ClientIPFromRemoteAddr,
-		logRequests(d.Logger),
+		observeRequests(d.Logger, d.Metrics),
 		middleware.Recoverer,
 		middleware.Timeout(requestTimeout),
 		middleware.GetHead,
@@ -88,26 +96,35 @@ func traceRequests(next http.Handler) http.Handler {
 	})
 }
 
-func logRequests(log *slog.Logger) func(http.Handler) http.Handler {
+func observeRequests(log *slog.Logger, obs RequestObserver) func(http.Handler) http.Handler {
+	if obs == nil {
+		obs = nopObserver{}
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			start := time.Now()
+			obs.RequestStarted()
 			next.ServeHTTP(ww, r)
+			duration, route, status := time.Since(start), routePattern(r), ww.Status()
+			if status == 0 {
+				status = http.StatusOK
+			}
+			obs.RequestFinished(r.Context(), r.Method, route, status, duration)
 			level := slog.LevelInfo
 			switch {
-			case ww.Status() >= http.StatusInternalServerError:
+			case status >= http.StatusInternalServerError:
 				level = slog.LevelError
-			case ww.Status() >= http.StatusBadRequest:
+			case status >= http.StatusBadRequest:
 				level = slog.LevelWarn
 			}
 			log.LogAttrs(r.Context(), level, "request",
 				slog.String("method", r.Method),
-				slog.String("route", routePattern(r)),
+				slog.String("route", route),
 				slog.String("path", r.URL.Path),
-				slog.Int("status", ww.Status()),
+				slog.Int("status", status),
 				slog.Int("bytes", ww.BytesWritten()),
-				slog.Duration("duration", time.Since(start)),
+				slog.Duration("duration", duration),
 				slog.String("request_id", middleware.GetReqID(r.Context())),
 			)
 		})
@@ -122,3 +139,8 @@ func routePattern(r *http.Request) string {
 	}
 	return unmatchedRoute
 }
+
+type nopObserver struct{}
+
+func (nopObserver) RequestStarted()                                                     {}
+func (nopObserver) RequestFinished(context.Context, string, string, int, time.Duration) {}

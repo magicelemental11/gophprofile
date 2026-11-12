@@ -18,14 +18,15 @@ import (
 )
 
 type env struct {
-	repo  *fakeRepo
-	store *fakeStore
-	svc   *AvatarService
+	repo    *fakeRepo
+	store   *fakeStore
+	metrics *fakeMetrics
+	svc     *AvatarService
 }
 
 func newEnv() *env {
-	e := &env{repo: newFakeRepo(), store: newFakeStore()}
-	e.svc = NewAvatarService(e.repo, e.store, slog.New(slog.DiscardHandler), 1<<20)
+	e := &env{repo: newFakeRepo(), store: newFakeStore(), metrics: &fakeMetrics{}}
+	e.svc = NewAvatarService(e.repo, e.store, e.metrics, slog.New(slog.DiscardHandler), 1<<20)
 	return e
 }
 
@@ -94,7 +95,7 @@ func TestUploadStorageFailure(t *testing.T) {
 
 func TestUploadMarkUploadedFailureCleansUp(t *testing.T) {
 	e := newEnv()
-	e.svc = NewAvatarService(&failMarkUploaded{fakeRepo: e.repo, err: errBoom}, e.store, slog.New(slog.DiscardHandler), 1<<20)
+	e.svc = NewAvatarService(&failMarkUploaded{fakeRepo: e.repo, err: errBoom}, e.store, &fakeMetrics{}, slog.New(slog.DiscardHandler), 1<<20)
 
 	_, err := e.svc.Upload(context.Background(), "u", "cat.png", bytes.NewReader(pngBytes(t, 10, 10)))
 	require.ErrorIs(t, err, errBoom)
@@ -111,7 +112,7 @@ func TestUploadMarkUploadedFailureCleansUp(t *testing.T) {
 func TestUploadCleanupAfterClientGone(t *testing.T) {
 	e := newEnv()
 	ctx, cancel := context.WithCancel(context.Background())
-	e.svc = NewAvatarService(&failMarkUploaded{fakeRepo: e.repo, err: context.Canceled, before: cancel}, e.store, slog.New(slog.DiscardHandler), 1<<20)
+	e.svc = NewAvatarService(&failMarkUploaded{fakeRepo: e.repo, err: context.Canceled, before: cancel}, e.store, &fakeMetrics{}, slog.New(slog.DiscardHandler), 1<<20)
 
 	_, err := e.svc.Upload(ctx, "u", "cat.png", bytes.NewReader(pngBytes(t, 10, 10)))
 	require.ErrorIs(t, err, context.Canceled)
@@ -324,7 +325,7 @@ func TestDeleteCurrentForbidden(t *testing.T) {
 
 func TestUploadDeletedMidwayRemovesOriginal(t *testing.T) {
 	e := newEnv()
-	e.svc = NewAvatarService(&deleteOnMarkUploaded{fakeRepo: e.repo}, e.store, slog.New(slog.DiscardHandler), 1<<20)
+	e.svc = NewAvatarService(&deleteOnMarkUploaded{fakeRepo: e.repo}, e.store, &fakeMetrics{}, slog.New(slog.DiscardHandler), 1<<20)
 
 	_, err := e.svc.Upload(context.Background(), "u", "cat.png", bytes.NewReader(pngBytes(t, 10, 10)))
 	require.ErrorIs(t, err, domain.ErrNotFound)

@@ -68,11 +68,36 @@ func (r *recordedSleeps) sleep(ctx context.Context, d time.Duration) error {
 	return ctx.Err()
 }
 
+type observed struct {
+	operation string
+	outcome   domain.Outcome
+}
+
+type fakeMetrics struct {
+	messages     []observed
+	retried      []string
+	deadLettered []string
+}
+
+func (m *fakeMetrics) ObserveMessage(_ context.Context, operation string, o domain.Outcome, _ time.Duration) {
+	m.messages = append(m.messages, observed{operation, o})
+}
+func (m *fakeMetrics) Retried(operation string) { m.retried = append(m.retried, operation) }
+func (m *fakeMetrics) DeadLettered(operation string) {
+	m.deadLettered = append(m.deadLettered, operation)
+}
+
 func newTestWorker(p *fakeProcessor, maxRetries int) (*Worker, *recordedSleeps) {
-	w := New(p, slog.New(slog.DiscardHandler), maxRetries)
+	w, s, _ := newObservedWorker(p, maxRetries)
+	return w, s
+}
+
+func newObservedWorker(p *fakeProcessor, maxRetries int) (*Worker, *recordedSleeps, *fakeMetrics) {
+	m := &fakeMetrics{}
+	w := New(p, m, slog.New(slog.DiscardHandler), maxRetries)
 	s := &recordedSleeps{}
 	w.sleep = s.sleep
-	return w, s
+	return w, s, m
 }
 
 func body(t *testing.T, v any) []byte {
@@ -211,4 +236,22 @@ func TestRetriesAreSpanEvents(t *testing.T) {
 	assert.Equal(t, "retry", events[0].Name)
 	assert.Contains(t, events[0].Attributes, attribute.Int("attempt", 1))
 	assert.Contains(t, events[1].Attributes, attribute.String("error", errTemporary.Error()))
+}
+
+func TestHandleMetrics(t *testing.T) {
+	p := &fakeProcessor{errs: []error{errTemporary, nil, errTemporary, errTemporary}}
+	w, _, m := newObservedWorker(p, 2)
+	ctx := context.Background()
+
+	require.NoError(t, w.Handle(ctx, Message{ID: "m1", RoutingKey: domain.RoutingDeleted, Body: body(t, domain.AvatarDeleteEvent{AvatarID: "a1"})}))
+	require.Error(t, w.Handle(ctx, Message{ID: "m2", RoutingKey: domain.RoutingUploaded, Body: body(t, domain.AvatarUploadEvent{AvatarID: "a2"})}))
+	require.Error(t, w.Handle(ctx, Message{ID: "m3", RoutingKey: domain.RoutingDeleted, Body: []byte("{")}))
+
+	assert.Equal(t, []observed{
+		{operationDelete, domain.OutcomeSuccess},
+		{operationProcess, domain.OutcomeError},
+		{operationDelete, domain.OutcomeError},
+	}, m.messages)
+	assert.Equal(t, []string{operationDelete, operationProcess}, m.retried)
+	assert.Equal(t, []string{operationProcess, operationDelete}, m.deadLettered)
 }

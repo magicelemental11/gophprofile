@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -30,13 +31,14 @@ type Image struct {
 type AvatarService struct {
 	repo    AvatarRepository
 	store   ObjectStorage
+	metrics Metrics
 	log     *slog.Logger
 	maxSize int64
 }
 
 // NewAvatarService wires the service to its ports; maxSize limits an upload in bytes.
-func NewAvatarService(repo AvatarRepository, store ObjectStorage, log *slog.Logger, maxSize int64) *AvatarService {
-	return &AvatarService{repo: repo, store: store, log: log, maxSize: maxSize}
+func NewAvatarService(repo AvatarRepository, store ObjectStorage, metrics Metrics, log *slog.Logger, maxSize int64) *AvatarService {
+	return &AvatarService{repo: repo, store: store, metrics: metrics, log: log, maxSize: maxSize}
 }
 
 // MaxSize returns the upload limit in bytes.
@@ -48,8 +50,10 @@ func (s *AvatarService) MaxSize() int64 {
 // queued in the outbox together with the uploaded status, so it cannot be lost. If the upload
 // cannot be completed, the stored original is removed and the avatar is marked failed.
 func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error) {
+	start := time.Now()
 	ctx, span := startSpan(ctx, "upload_avatar", attribute.String("user_id", userID), attribute.String("file_name", fileName))
 	a, err := s.upload(ctx, userID, fileName, r)
+	s.metrics.ObserveUpload(ctx, domain.OutcomeOf(err), time.Since(start))
 	endSpan(span, err)
 	return a, err
 }
@@ -248,6 +252,7 @@ func (s *AvatarService) Delete(ctx context.Context, requesterID, avatarID string
 	if err == nil {
 		err = s.delete(ctx, requesterID, a)
 	}
+	s.metrics.ObserveDelete(domain.OutcomeOf(err))
 	endSpan(span, err)
 	return err
 }
@@ -256,6 +261,7 @@ func (s *AvatarService) Delete(ctx context.Context, requesterID, avatarID string
 func (s *AvatarService) DeleteCurrent(ctx context.Context, requesterID, userID string) error {
 	ctx, span := startSpan(ctx, "delete_avatar", attribute.String("user_id", requesterID))
 	err := s.deleteCurrent(ctx, requesterID, userID)
+	s.metrics.ObserveDelete(domain.OutcomeOf(err))
 	endSpan(span, err)
 	return err
 }

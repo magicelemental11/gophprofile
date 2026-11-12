@@ -17,6 +17,7 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/config"
 	"github.com/magicelemental11/gophprofile/internal/handlers"
 	"github.com/magicelemental11/gophprofile/internal/logger"
+	"github.com/magicelemental11/gophprofile/internal/metrics"
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
 	"github.com/magicelemental11/gophprofile/internal/service"
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
@@ -27,6 +28,7 @@ const (
 	serviceName     = "gophprofile-server"
 	shutdownTimeout = 10 * time.Second
 	flushTimeout    = 5 * time.Second
+	statsTimeout    = 2 * time.Second
 	relayInterval   = time.Second
 )
 
@@ -86,6 +88,19 @@ func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
 	}
 	defer func() { _ = broker.Close() }()
 
+	m := metrics.New()
+	err = m.Register(
+		metrics.NewPoolCollector(func() metrics.PoolStat { return repo.PoolStat() }),
+		metrics.NewStatsCollector(repo, statsTimeout),
+	)
+	if err != nil {
+		return err
+	}
+	metricsCtx, stopMetrics := context.WithCancel(ctx)
+	defer stopMetrics()
+	metricsErr := make(chan error, 1)
+	go func() { metricsErr <- metrics.Serve(metricsCtx, cfg.MetricsAddress, m.Handler()) }()
+
 	relayCtx, stopRelay := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
 	go func() {
@@ -99,8 +114,9 @@ func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
 
 	router := handlers.NewRouter(handlers.Deps{
 		Logger:  lg,
+		Metrics: m,
 		Health:  map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
-		Avatars: service.NewAvatarService(repo, store, lg, cfg.MaxUploadSize),
+		Avatars: service.NewAvatarService(repo, store, m, lg, cfg.MaxUploadSize),
 		Web:     web,
 		Security: handlers.Security{
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
@@ -116,12 +132,14 @@ func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
 	closed := broker.NotifyClose()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	lg.InfoContext(ctx, "server started", slog.String("address", cfg.Address))
+	lg.InfoContext(ctx, "server started", slog.String("address", cfg.Address), slog.String("metrics_address", cfg.MetricsAddress))
 
 	var runErr error
 	select {
 	case err := <-errCh:
 		return err
+	case err := <-metricsErr:
+		runErr = err
 	case amqpErr, ok := <-closed:
 		runErr = errors.New("broker connection closed")
 		if ok {

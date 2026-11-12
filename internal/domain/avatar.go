@@ -186,3 +186,13 @@ func OriginalKey(avatarID string, f Format) string {
 func ThumbnailKey(avatarID string, s Size) string {
 	return "thumbnails/" + avatarID + "/" + string(s) + ".jpg"
 }
+
+// Stats is a snapshot of stored avatars for monitoring.
+type Stats struct {
+	// StorageBytes is the size of uploaded, non-deleted originals per user id.
+	StorageBytes map[string]int64
+	// Avatars counts uploaded, non-deleted avatars per processing status.
+	Avatars map[ProcessingStatus]int64
+	// OutboxPending counts events not yet published to the broker.
+	OutboxPending int64
+}
