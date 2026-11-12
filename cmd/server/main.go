@@ -1,0 +1,126 @@
+// Command server runs the GophProfile HTTP API and web interface.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
+	"github.com/magicelemental11/gophprofile/internal/config"
+	"github.com/magicelemental11/gophprofile/internal/handlers"
+	"github.com/magicelemental11/gophprofile/internal/logger"
+	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
+	"github.com/magicelemental11/gophprofile/internal/service"
+	"github.com/magicelemental11/gophprofile/internal/storage/s3"
+)
+
+const (
+	shutdownTimeout = 10 * time.Second
+	relayInterval   = time.Second
+)
+
+func main() {
+	cfg, err := config.LoadServer(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
+	lg, err := logger.New(cfg.LogLevel)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = lg.Sync() }()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, cfg, lg); err != nil {
+		lg.Fatal("server stopped", zap.Error(err))
+	}
+}
+
+func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
+	web, err := handlers.NewWeb(os.DirFS(cfg.WebDir))
+	if err != nil {
+		return err
+	}
+	repo, err := postgres.New(ctx, cfg.DatabaseDSN)
+	if err != nil {
+		return fmt.Errorf("database: %w", err)
+	}
+	defer repo.Close()
+	if err := repo.Migrate(); err != nil {
+		return err
+	}
+	store, err := s3.New(ctx, cfg.S3)
+	if err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	broker, err := rabbitmq.Dial(cfg.AMQPURL)
+	if err != nil {
+		return fmt.Errorf("broker: %w", err)
+	}
+	defer func() { _ = broker.Close() }()
+
+	relayCtx, stopRelay := context.WithCancel(ctx)
+	relayDone := make(chan struct{})
+	go func() {
+		service.NewRelay(repo, broker, lg, relayInterval).Run(relayCtx)
+		close(relayDone)
+	}()
+	defer func() {
+		stopRelay()
+		<-relayDone
+	}()
+
+	router := handlers.NewRouter(handlers.Deps{
+		Logger:  lg,
+		Health:  map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
+		Avatars: service.NewAvatarService(repo, store, lg, cfg.MaxUploadSize),
+		Web:     web,
+		Security: handlers.Security{
+			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
+			RateLimitRPS:       cfg.RateLimitRPS,
+			UploadRateLimit:    cfg.UploadRateLimit,
+		},
+	})
+	srv := &http.Server{
+		Addr:              cfg.Address,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	closed := broker.NotifyClose()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+	lg.Info("server started", zap.String("address", cfg.Address))
+
+	var runErr error
+	select {
+	case err := <-errCh:
+		return err
+	case amqpErr, ok := <-closed:
+		runErr = errors.New("broker connection closed")
+		if ok {
+			runErr = fmt.Errorf("broker connection lost: %w", amqpErr)
+		}
+	case <-ctx.Done():
+	}
+	lg.Info("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown: %w", err)
+	}
+	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return runErr
+}

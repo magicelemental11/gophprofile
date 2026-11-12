@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GophProfile</title>
+  <link rel="icon" href="data:,">
+  <style>.hidden { display: none; }</style>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+</head>
+
+<body class="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+  <div class="container mx-auto px-4 py-8 max-w-3xl">
+    <div class="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 overflow-hidden">
+      <header class="bg-gradient-to-r from-purple-600 to-blue-600 p-6">
+        <h1 class="text-3xl font-bold text-white text-center">GophProfile</h1>
+        <nav class="flex justify-center gap-6 mt-3 text-white/80">
+          <a href="/web/upload" data-nav class="hover:text-white">Upload</a>
+          <a href="/web/gallery/" id="galleryLink" data-nav class="hover:text-white">Gallery</a>
+        </nav>
+      </header>
+
+      <main class="p-6 space-y-6">
+        <div id="errorMessage" class="{{if not .Error}}hidden {{end}}bg-red-500/20 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg">{{.Error}}</div>
+
+        <section id="uploadView">
+          <form id="uploadForm" method="post" action="/web/upload" enctype="multipart/form-data" class="space-y-4">
+            <div>
+              <label for="userId" class="block text-sm font-medium text-white mb-2">
+                User ID <span class="text-red-400">*</span>
+              </label>
+              <input type="text" id="userId" name="user_id" value="{{.UserID}}" required placeholder="gopher@example.com"
+                class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all">
+            </div>
+
+            <div>
+              <label for="file" class="block text-sm font-medium text-white mb-2">
+                Choose Image <span class="text-red-400">*</span>
+              </label>
+              <div id="dropZone" class="rounded-lg border-2 border-dashed border-white/20 p-4 transition-colors">
+                <input type="file" id="file" name="file" accept="image/jpeg,image/png,image/webp" required
+                  class="w-full text-white file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-600 file:text-white hover:file:bg-purple-700 cursor-pointer">
+                <p class="text-white/50 text-sm mt-2">JPEG, PNG or WebP up to 10 MB. You can drop a file here.</p>
+              </div>
+              <div id="imagePreview" class="mt-4 hidden">
+                <img id="previewImg" src="" alt="Preview" class="w-32 h-32 object-cover rounded-lg shadow-lg mx-auto">
+              </div>
+            </div>
+
+            <div id="progress" class="hidden h-2 bg-white/10 rounded-full overflow-hidden">
+              <div id="progressBar" class="h-full w-0 bg-gradient-to-r from-purple-500 to-blue-500 transition-all"></div>
+            </div>
+
+            <button type="submit" id="submitBtn"
+              class="w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white font-semibold py-3 px-6 rounded-lg shadow-lg hover:from-purple-700 hover:to-blue-700 disabled:opacity-50 transition-all">
+              Upload Avatar
+            </button>
+          </form>
+        </section>
+
+        <section id="galleryView" class="hidden space-y-4">
+          <h2 id="galleryTitle" class="text-xl font-semibold text-white break-all"></h2>
+          <p id="galleryEmpty" class="hidden text-white/60">No avatars yet.</p>
+          <div id="gallery" class="grid grid-cols-2 sm:grid-cols-3 gap-4"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <template id="cardTemplate">
+    <div class="bg-black/20 rounded-lg overflow-hidden border border-white/10">
+      <div class="aspect-square bg-white/5 flex items-center justify-center">
+        <img class="w-full h-full object-cover hidden" alt="">
+        <span class="placeholder text-white/50 text-sm animate-pulse">Processing…</span>
+      </div>
+      <div class="p-3 space-y-2">
+        <p class="name text-white text-sm truncate"></p>
+        <div class="flex items-center justify-between">
+          <span class="status text-xs px-2 py-1 rounded-full"></span>
+          <button type="button" class="delete text-xs text-red-300 hover:text-red-200">Delete</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script src="/web/static/app.js"></script>
+</body>
+
+</html>

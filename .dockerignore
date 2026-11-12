@@ -1,0 +1,7 @@
+.git
+.scratch
+coverage*
+*.out
+node_modules
+bin/
+.env
