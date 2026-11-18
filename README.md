@@ -59,6 +59,18 @@ docker compose up --build -d   # или make up
 
 MinIO запускается из образа `pgsty/minio` — официальные образы MinIO больше не публикуются.
 
+### Наблюдаемость
+
+| Сервис | Адрес | Что там |
+|---|---|---|
+| Jaeger | http://localhost:16686 | Трейсы: HTTP-запрос → сервис → PostgreSQL/S3 → outbox → RabbitMQ → worker |
+| Prometheus | http://localhost:9090 | Метрики server, worker, RabbitMQ, MinIO; Status → Targets |
+| Grafana | http://localhost:3000 | Логин `admin`, пароль — `GRAFANA_ADMIN_PASSWORD` из `.env` |
+
+Server и worker отправляют трейсы по OTLP/gRPC в Jaeger (`OTEL_EXPORTER_OTLP_ENDPOINT`) и отдают метрики на порту `9091` внутри сети Compose (`METRICS_ADDRESS`). Каждый ответ API содержит заголовок `X-Trace-ID` — по нему трейс находится в Jaeger. В Grafana у метрик-гистограмм есть exemplars со ссылкой на трейс.
+
+Jaeger 2.23 отдаёт список сервисов и поиск трейсов только через `/api/v3`, поэтому в Grafana включён флаг `jaegerEnableGrpcEndpoint`. Трейс по ID и переход из exemplar работают в Grafana, поиск трейсов по сервису — в UI Jaeger.
+
 ## Запуск для разработки
 
 ```sh

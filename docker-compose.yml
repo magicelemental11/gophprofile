@@ -15,7 +15,11 @@ x-app: &app
     CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080}
     RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
     UPLOAD_RATE_LIMIT: ${UPLOAD_RATE_LIMIT:-10}
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    METRICS_ADDRESS: ":9091"
   depends_on:
+    jaeger:
+      condition: service_started
     postgres:
       condition: service_healthy
     rabbitmq:
@@ -74,6 +78,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+      MINIO_PROMETHEUS_AUTH_TYPE: public
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -85,7 +90,46 @@ services:
       timeout: 5s
       retries: 10
 
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.23.0
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --enable-feature=exemplar-storage
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:13.2.6
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Jaeger 2.23 serves services, operations and trace search only under /api/v3.
+      GF_FEATURE_TOGGLES_ENABLE: jaegerEnableGrpcEndpoint
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - jaeger
+
 volumes:
   postgres-data:
   rabbitmq-data:
   minio-data:
+  prometheus-data:
+  grafana-data:
