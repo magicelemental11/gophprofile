@@ -26,6 +26,7 @@ x-app: &app
     options:
       fluentd-address: localhost:24224
       fluentd-async: "true"
+      fluentd-sub-second-precision: "true"
       tag: gophprofile.{{.Name}}
   depends_on:
     jaeger:
@@ -103,8 +104,8 @@ services:
   jaeger:
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.23.0
     ports:
-      - "16686:16686"
-      - "4317:4317"
+      - "127.0.0.1:16686:16686"
+      - "127.0.0.1:4317:4317"
 
   prometheus:
     image: prom/prometheus:v3.15.1
@@ -114,7 +115,7 @@ services:
       - --enable-feature=exemplar-storage
       - --web.enable-lifecycle
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./deploy/prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
@@ -127,7 +128,7 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     volumes:
       - ./deploy/alertmanager:/etc/alertmanager:ro
       - alertmanager-data:/alertmanager
