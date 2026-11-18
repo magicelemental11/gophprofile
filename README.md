@@ -55,6 +55,8 @@ docker compose up --build -d   # или make up
 
 Логины и пароли PostgreSQL, RabbitMQ и MinIO задаются только в `.env` (он не коммитится), без них `docker compose` не запустится. Пароли можно вписать в `.env` и вручную, но они попадают в URL подключения, поэтому должны быть URL-safe. PostgreSQL и RabbitMQ запоминают учётные данные при первом запуске, поэтому после их смены тома нужно пересоздать: `docker compose down -v`.
 
+`.env`, созданный до появления стека наблюдаемости, нужно дополнить строками `GRAFANA_ADMIN_PASSWORD=<пароль>` и `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` из `.env.example`: `make env` не перезаписывает существующий файл, а Compose без пароля Grafana не запустится.
+
 Поднимаются server (`http://localhost:8080`), worker, PostgreSQL, RabbitMQ (management — `http://localhost:15672`) и MinIO (консоль — `http://localhost:9001`). Server и worker собираются в один образ из `docker/Dockerfile`. При потере соединения с RabbitMQ оба процесса завершаются, и Compose перезапускает их. Логи — `make logs`, остановка — `make down`. Вместе с сервисом поднимается стек наблюдаемости, см. [Наблюдаемость](#наблюдаемость).
 
 MinIO запускается из образа `pgsty/minio` — официальные образы MinIO больше не публикуются.
