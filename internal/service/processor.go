@@ -77,6 +77,12 @@ func (p *Processor) process(ctx context.Context, messageID string, ev domain.Ava
 		return err
 	}
 	keys, err := p.thumbnails(ctx, a, ev.Operations)
+	if errors.Is(err, domain.ErrNotFound) {
+		if _, getErr := p.repo.Get(ctx, a.ID); errors.Is(getErr, domain.ErrNotFound) {
+			p.log.InfoContext(ctx, "avatar deleted during processing", slog.String("avatar_id", a.ID))
+			return p.removeThumbnails(ctx, a.ID)
+		}
+	}
 	if err != nil {
 		return err
 	}

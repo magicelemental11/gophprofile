@@ -183,6 +183,37 @@ func (r *deleteOnComplete) CompleteProcessing(ctx context.Context, id string, ke
 	return r.fakeRepo.CompleteProcessing(ctx, id, keys, msg)
 }
 
+func TestProcessOriginalDeletedMeanwhileIsNotPermanent(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	repo := &deleteOnProcessing{fakeRepo: e.repo, store: e.store}
+	p := NewProcessor(repo, e.store, slog.New(slog.DiscardHandler))
+
+	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
+	for _, k := range domain.ThumbnailKeysOf(a.ID) {
+		assert.False(t, e.store.has(k), k)
+	}
+}
+
+type deleteOnProcessing struct {
+	*fakeRepo
+	store *fakeStore
+}
+
+func (r *deleteOnProcessing) SetProcessingStatus(ctx context.Context, id string, status domain.ProcessingStatus) error {
+	if err := r.fakeRepo.SetProcessingStatus(ctx, id, status); err != nil {
+		return err
+	}
+	a, err := r.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := r.SoftDelete(ctx, id, domain.Event{}); err != nil {
+		return err
+	}
+	return r.store.Delete(ctx, []string{a.S3Key})
+}
+
 func TestMarkFailed(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
