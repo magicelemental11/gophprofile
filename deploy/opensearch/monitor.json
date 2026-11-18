@@ -25,6 +25,16 @@
     "name": "Errors in service logs",
     "severity": "2",
     "condition": {"script": {"source": "ctx.results[0].hits.total.value > 0", "lang": "painless"}},
-    "actions": []
+    "actions": [{
+      "name": "Notify alert receiver",
+      "destination_id": "gophprofile-alert-receiver",
+      "throttle_enabled": true,
+      "throttle": {"value": 10, "unit": "MINUTES"},
+      "subject_template": {"source": "GophProfile: errors in service logs", "lang": "mustache"},
+      "message_template": {
+        "source": "{\"monitor\":\"{{ctx.monitor.name}}\",\"trigger\":\"{{ctx.trigger.name}}\",\"severity\":\"{{ctx.trigger.severity}}\",\"errors\":{{ctx.results.0.hits.total.value}},\"by_service\":\"{{#ctx.results.0.aggregations.by_service.buckets}}{{key}}={{doc_count}} {{/ctx.results.0.aggregations.by_service.buckets}}\",\"period_end\":\"{{ctx.periodEnd}}\",\"search\":\"http://localhost:5601/app/data-explorer/discover#/view/gophprofile-errors\"}",
+        "lang": "mustache"
+      }
+    }]
   }]
 }

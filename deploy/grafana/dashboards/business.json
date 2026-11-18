@@ -28,6 +28,13 @@
     },
     {
       "type": "link",
+      "title": "Alertmanager",
+      "url": "http://localhost:9093",
+      "targetBlank": true,
+      "icon": "bolt"
+    },
+    {
+      "type": "link",
       "title": "Jaeger",
       "url": "http://localhost:16686",
       "targetBlank": true,

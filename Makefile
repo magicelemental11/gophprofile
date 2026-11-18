@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: env build run-server run-worker docker-build up up-deps down logs test test-integration cover lint clean
+.PHONY: env build run-server run-worker docker-build up up-deps down logs test test-integration test-alerts cover lint load clean
 
 env:
 	@test ! -e .env || { echo ".env already exists" >&2; exit 1; }
@@ -41,12 +41,21 @@ test:
 test-integration:
 	go test -race -tags integration ./...
 
+PROMETHEUS_IMAGE ?= prom/prometheus:v3.15.1
+
+test-alerts:
+	docker run --rm -v "$(CURDIR)/deploy/prometheus:/rules:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) check rules /rules/alerts.yml
+	docker run --rm -v "$(CURDIR)/deploy/prometheus:/rules:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) test rules /rules/alerts_test.yml
+
 cover:
 	go test -race -coverprofile=cover.out $$(go list ./... | grep -v /cmd/)
 	go tool cover -func=cover.out | tail -1
 
 lint:
 	golangci-lint run
+
+load:
+	scripts/load.sh
 
 clean:
 	rm -rf bin cover.out

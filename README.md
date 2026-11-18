@@ -65,6 +65,7 @@ MinIO запускается из образа `pgsty/minio` — официал�
 |---|---|---|
 | Jaeger | http://localhost:16686 | Трейсы: HTTP-запрос → сервис → PostgreSQL/S3 → outbox → RabbitMQ → worker |
 | Prometheus | http://localhost:9090 | Метрики server, worker, RabbitMQ, MinIO; Status → Targets |
+| Alertmanager | http://localhost:9093 | Активные алерты и тишины; уведомления уходят webhook-ом в контейнер `alert-receiver` |
 | Grafana | http://localhost:3000 | Логин `admin`, пароль — `GRAFANA_ADMIN_PASSWORD` из `.env` |
 | OpenSearch Dashboards | http://localhost:5601 | Логи server и worker: Discover, сохранённые поиски «Ошибки» и «По trace_id», Alerting |
 
@@ -87,9 +88,55 @@ Jaeger 2.23 отдаёт список сервисов и поиск трейс�
 | **Resources** | **Business KPIs** |
 | ![Resources](docs/img/grafana-resources.png) | ![Business KPIs](docs/img/grafana-business.png) |
 
-Логи server и worker — JSON (slog) с полями `service`, `level`, `msg`, `trace_id`, `span_id`, `request_id`, `user_id`, `avatar_id`, `route`, `status`. Docker отдаёт их драйвером `fluentd` в Fluent Bit (`deploy/fluent-bit`), тот разбирает JSON и пишет в OpenSearch в индексы `gophprofile-logs-YYYY.MM.DD`; строки не в JSON (например, паника) сохраняются в поле `log`. `docker compose logs` продолжает работать. Одноразовый контейнер `opensearch-init` (`deploy/opensearch/init.sh`) создаёт шаблон индекса, политику удаления индексов старше 7 дней, index pattern и сохранённые поиски, а также монитор Alerting `gophprofile-error-logs`: раз в минуту он проверяет, были ли записи `level:ERROR` за последние 5 минут. Примеры фильтров в Discover: `trace_id:<X-Trace-ID>`, `level:ERROR`, `service:gophprofile-worker and avatar_id:<id>`. Значение `trace_id` в Discover — ссылка на трейс в Jaeger.
+Логи server и worker — JSON (slog) с полями `service`, `level`, `msg`, `trace_id`, `span_id`, `request_id`, `user_id`, `avatar_id`, `route`, `status`. Docker отдаёт их драйвером `fluentd` в Fluent Bit (`deploy/fluent-bit`), тот разбирает JSON и пишет в OpenSearch в индексы `gophprofile-logs-YYYY.MM.DD`; строки не в JSON (например, паника) сохраняются в поле `log`. `docker compose logs` продолжает работать. Одноразовый контейнер `opensearch-init` (`deploy/opensearch/init.sh`) создаёт шаблон индекса, политику удаления индексов старше 7 дней, index pattern и сохранённые поиски, а также монитор Alerting `gophprofile-error-logs`: раз в минуту он проверяет, были ли записи `level:ERROR` за последние 5 минут, и если были — отправляет webhook в тот же `alert-receiver` (канал Notifications `gophprofile-alert-receiver`, не чаще раза в 10 минут). Примеры фильтров в Discover: `trace_id:<X-Trace-ID>`, `level:ERROR`, `service:gophprofile-worker and avatar_id:<id>`. Значение `trace_id` в Discover — ссылка на трейс в Jaeger.
 
 OpenSearch запускается без security-плагина и слушает только `127.0.0.1` — это стенд для разработки.
+
+### Алерты
+
+Правила — `deploy/prometheus/alerts.yml`, тесты на синтетических сериях — `deploy/prometheus/alerts_test.yml` (`make test-alerts`, promtool из образа Prometheus; то же в CI). Alertmanager (`deploy/alertmanager`) группирует по `alertname` и шлёт warning и critical разными маршрутами (`/alertmanager/warning`, `/alertmanager/critical`) в `alert-receiver` — эхо-сервер, который печатает каждый запрос: `docker compose logs -f alert-receiver`. На overview-дашборде — счётчик сработавших алертов и ссылка на Alertmanager.
+
+Проверить вживую:
+
+```sh
+make load &                     # фоновая нагрузка, scripts/load.sh
+docker compose stop minio       # загрузки отвечают 500
+# ~1 мин: HighErrorRate pending в http://localhost:9090/alerts, ещё 5 мин — firing,
+# через group_wait 30 с JSON алерта в docker compose logs alert-receiver
+docker compose start minio      # когда ошибки уйдут из 5-минутного окна — "status":"resolved"
+docker compose stop worker      # через ~1.5 мин ServiceDown (critical)
+docker compose start worker
+```
+
+Во время остановки MinIO воркер исчерпывает ретраи, сообщения уходят в `avatars.dlq` — сработает и `DeadLetterQueueGrowing`, а монитор OpenSearch пришлёт webhook об ошибках в логах.
+
+#### HighErrorRate
+
+Больше 10% загрузок за 5 минут завершились ошибкой сервиса (не 4xx), 5 минут подряд. Смотреть `/health`, панель Recent errors и поиск «Ошибки» в OpenSearch Dashboards: чаще всего недоступен MinIO или PostgreSQL. По `trace_id` из лога — трейс в Jaeger, на каком шаге упало.
+
+#### HighResponseTime
+
+p95 загрузки больше 5 секунд 2 минуты подряд. Открыть exemplar на панели Upload duration (Business KPIs) — в трейсе видно, что медленное: `s3.put_object`, транзакция PostgreSQL или публикация. Проверить ресурсы MinIO и пул соединений на дашборде Resources.
+
+#### HTTPHighErrorRate
+
+Больше 5% HTTP-ответов — 5xx. На дашборде RED видно, какой `route`; дальше как для HighErrorRate.
+
+#### ServiceDown
+
+Prometheus не может снять метрики server или worker минуту. `docker compose ps`, `docker compose logs server worker`: процессы завершаются при потере RabbitMQ и перезапускаются Compose.
+
+#### DeadLetterQueueGrowing
+
+Воркер исчерпал ретраи и отправил сообщения в `avatars.dlq`. Причина — в логах `level:ERROR` с `msg:"message failed"`; после устранения сообщения можно вернуть через management UI RabbitMQ (Shovel или Get/Publish) либо удалить.
+
+#### ProcessingBacklog
+
+В `avatars.processing` больше 50 сообщений 5 минут: воркер не успевает или не работает. Проверить consumers на дашборде Resources и время обработки на RED.
+
+#### OutboxBacklog
+
+Больше 100 событий в outbox 5 минут: relay в server не публикует. Проверить доступность RabbitMQ и логи server.
 
 ## Запуск для разработки
 

@@ -28,6 +28,13 @@
     },
     {
       "type": "link",
+      "title": "Alertmanager",
+      "url": "http://localhost:9093",
+      "targetBlank": true,
+      "icon": "bolt"
+    },
+    {
+      "type": "link",
       "title": "Jaeger",
       "url": "http://localhost:16686",
       "targetBlank": true,
@@ -740,6 +747,74 @@
     },
     {
       "type": "stat",
+      "title": "Firing alerts",
+      "description": "Alerts firing in Prometheus; details in Alertmanager (link above).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "count(ALERTS{alertstate=\"firing\"}) or vector(0)",
+          "legendFormat": "__auto",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "showPercentChange": false,
+        "wideLayout": true
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 6
+      },
+      "id": 11
+    },
+    {
+      "type": "stat",
       "title": "Stored avatars",
       "description": "",
       "datasource": {
@@ -797,11 +872,11 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
-        "x": 16,
+        "w": 4,
+        "x": 20,
         "y": 6
       },
-      "id": 11
+      "id": 12
     },
     {
       "type": "row",
@@ -814,7 +889,7 @@
         "x": 0,
         "y": 11
       },
-      "id": 12
+      "id": 13
     },
     {
       "type": "timeseries",
@@ -884,7 +959,7 @@
         "x": 0,
         "y": 12
       },
-      "id": 13
+      "id": 14
     },
     {
       "type": "timeseries",
@@ -977,7 +1052,7 @@
         "x": 12,
         "y": 12
       },
-      "id": 14
+      "id": 15
     },
     {
       "type": "timeseries",
@@ -1047,7 +1122,7 @@
         "x": 0,
         "y": 20
       },
-      "id": 15
+      "id": 16
     },
     {
       "type": "timeseries",
@@ -1128,7 +1203,7 @@
         "x": 12,
         "y": 20
       },
-      "id": 16
+      "id": 17
     },
     {
       "type": "row",
@@ -1141,7 +1216,7 @@
         "x": 0,
         "y": 28
       },
-      "id": 17
+      "id": 18
     },
     {
       "type": "logs",
@@ -1185,7 +1260,7 @@
         "x": 0,
         "y": 29
       },
-      "id": 18
+      "id": 19
     }
   ],
   "version": 1

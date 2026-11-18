@@ -1,0 +1,78 @@
+groups:
+  - name: avatar-service
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(avatars_uploads_total{status="error"}[5m]))
+            / sum(rate(avatars_uploads_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 10% of avatar uploads fail
+          description: "{{ $value | humanizePercentage }} of uploads ended with a server error over the last 5 minutes."
+          runbook_url: https://github.com/magicelemental11/gophprofile#higherrorrate
+
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(avatars_upload_duration_seconds_bucket[5m]))) > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Avatar uploads are slow
+          description: "p95 upload duration is {{ $value | humanizeDuration }}."
+          runbook_url: https://github.com/magicelemental11/gophprofile#highresponsetime
+
+      - alert: HTTPHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{code=~"5.."}[5m]))
+            / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 5% of HTTP requests end with 5xx
+          description: "{{ $value | humanizePercentage }} of requests returned 5xx over the last 5 minutes."
+          runbook_url: https://github.com/magicelemental11/gophprofile#httphigherrorrate
+
+      - alert: ServiceDown
+        expr: up{job=~"server|worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down"
+          description: "Prometheus cannot scrape {{ $labels.instance }}."
+          runbook_url: https://github.com/magicelemental11/gophprofile#servicedown
+
+      - alert: DeadLetterQueueGrowing
+        expr: |
+          sum(rabbitmq_detailed_queue_messages{queue="avatars.dlq"}) > 0
+            or sum(increase(worker_dead_lettered_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Messages are going to the dead-letter queue
+          description: The worker gave up on messages; they wait in avatars.dlq.
+          runbook_url: https://github.com/magicelemental11/gophprofile#deadletterqueuegrowing
+
+      - alert: ProcessingBacklog
+        expr: sum(rabbitmq_detailed_queue_messages{queue="avatars.processing"}) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Thumbnail queue is backing up
+          description: "{{ $value }} messages wait in avatars.processing."
+          runbook_url: https://github.com/magicelemental11/gophprofile#processingbacklog
+
+      - alert: OutboxBacklog
+        expr: outbox_pending_events > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Outbox events are not being published
+          description: "{{ $value }} events wait in the outbox."
+          runbook_url: https://github.com/magicelemental11/gophprofile#outboxbacklog

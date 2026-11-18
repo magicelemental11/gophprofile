@@ -34,6 +34,12 @@ else
   echo "retention policy: created"
 fi
 
+# The monitor's webhook action refers to this channel by its fixed id; recreate it so the
+# file stays the source of truth.
+curl -sS -o /dev/null -X DELETE "$OS/_plugins/_notifications/configs/gophprofile-alert-receiver"
+call POST "$OS/_plugins/_notifications/configs" "$DIR/alert-channel.json" >/dev/null
+echo "alert channel: ok"
+
 found=$(printf '{"query":{"term":{"monitor.name.keyword":"gophprofile-error-logs"}}}' |
   curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- "$OS/_plugins/_alerting/monitors/_search" |
   grep -o '"_id":"[^"]*"' | head -n1 | cut -d'"' -f4 || true)
