@@ -69,8 +69,6 @@ func New() *Metrics {
 	return m
 }
 
-// initSeries exports the known label combinations at zero, so rates and alerts see 0
-// instead of a missing series before the first event.
 func (m *Metrics) initSeries() {
 	for _, o := range domain.Outcomes {
 		m.uploads.WithLabelValues(string(o))

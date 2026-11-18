@@ -27,8 +27,13 @@ until curl -sf "$OS/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/nul
 call PUT "$OS/_index_template/gophprofile-logs" "$DIR/index-template.json" >/dev/null
 echo "index template: ok"
 
-if curl -sf "$OS/_plugins/_ism/policies/gophprofile-logs-retention" >/dev/null; then
-  echo "retention policy: exists"
+# ISM updates are optimistic: the current _seq_no and _primary_term must be passed back.
+if policy=$(curl -sf "$OS/_plugins/_ism/policies/gophprofile-logs-retention"); then
+  seq=$(printf '%s' "$policy" | grep -o '"_seq_no":[0-9]*' | cut -d: -f2)
+  term=$(printf '%s' "$policy" | grep -o '"_primary_term":[0-9]*' | cut -d: -f2)
+  call PUT "$OS/_plugins/_ism/policies/gophprofile-logs-retention?if_seq_no=$seq&if_primary_term=$term" \
+    "$DIR/ism-policy.json" >/dev/null
+  echo "retention policy: updated"
 else
   call PUT "$OS/_plugins/_ism/policies/gophprofile-logs-retention" "$DIR/ism-policy.json" >/dev/null
   echo "retention policy: created"

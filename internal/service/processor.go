@@ -123,6 +123,9 @@ func (p *Processor) thumbnails(ctx context.Context, a domain.Avatar, ops []domai
 		return nil, fmt.Errorf("%w: unsupported type %q", ErrPermanent, a.MimeType)
 	}
 	body, err := p.store.Get(ctx, a.S3Key)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil, fmt.Errorf("%w: original is missing: %w", ErrPermanent, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("download original: %w", err)
 	}

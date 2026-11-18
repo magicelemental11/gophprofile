@@ -269,6 +269,8 @@ func TestUserAvatar(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "gopher@example.com", svc.opened.user)
 	assert.Equal(t, domain.Size100, svc.opened.size)
+	assert.Equal(t, "no-cache", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, `"e1"`, rec.Header().Get("ETag"))
 }
 
 func TestUserAvatarPlaceholder(t *testing.T) {
@@ -276,7 +278,7 @@ func TestUserAvatarPlaceholder(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "image/png", rec.Header().Get("Content-Type"))
 	assert.Equal(t, placeholder, rec.Body.Bytes())
-	assert.Equal(t, "public, max-age=300", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", rec.Header().Get("Cache-Control"))
 }
 
 func testAvatar() domain.Avatar {

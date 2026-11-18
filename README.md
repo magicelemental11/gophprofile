@@ -244,14 +244,14 @@ curl -i -F file=@cat.png -H 'X-User-ID: gopher@example.com' http://localhost:808
 # 413 {"error":"File too large","max_size":10485760}
 ```
 
-Картинка по id, с выбором размера и формата (по умолчанию — оригинал в исходном формате; ответы с `ETag`, поддерживаются `If-None-Match` → 304 без чтения файла и `HEAD`):
+Картинка по id, с выбором размера и формата (по умолчанию — оригинал в исходном формате; ответы с `ETag` и `Cache-Control: public, max-age=86400`, поддерживаются `If-None-Match` → 304 без чтения файла и `HEAD`):
 
 ```sh
 curl -o avatar.png http://localhost:8080/api/v1/avatars/{id}
 curl -o thumb.webp 'http://localhost:8080/api/v1/avatars/{id}?size=100x100&format=webp'
 ```
 
-Текущий (последний загруженный) аватар пользователя; если его нет — PNG-заглушка:
+Текущий (последний загруженный) аватар пользователя; если его нет — PNG-заглушка. Он меняется после каждой загрузки и удаления, поэтому отдаётся с `Cache-Control: no-cache`: браузер каждый раз сверяет `ETag` и получает 304, пока аватар тот же:
 
 ```sh
 curl -o me.jpg 'http://localhost:8080/api/v1/users/gopher@example.com/avatar?size=300x300'

@@ -23,7 +23,6 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/worker"
 )
 
-// version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
 const (

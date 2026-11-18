@@ -91,6 +91,9 @@ func TestProcessPermanentErrors(t *testing.T) {
 	e.store.objects[a.S3Key] = []byte("corrupted")
 	assert.ErrorIs(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), ErrPermanent)
 
+	delete(e.store.objects, a.S3Key)
+	assert.ErrorIs(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), ErrPermanent, "original is gone")
+
 	e.store.putFails = 1
 	failed, err := e.svc.Upload(context.Background(), "u", "x.png", bytes.NewReader(pngBytes(t, 5, 5)))
 	require.Error(t, err)

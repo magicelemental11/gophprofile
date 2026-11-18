@@ -188,7 +188,7 @@ func (h *api) image(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.sendImage(w, r, img)
+	h.sendImage(w, r, img, cacheImmutable)
 }
 
 func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +201,7 @@ func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, domain.ErrNotFound) {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Content-Disposition", "inline")
-		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.Header().Set("Cache-Control", cacheRevalidate)
 		_, _ = w.Write(placeholder)
 		return
 	}
@@ -209,17 +209,22 @@ func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.sendImage(w, r, img)
+	h.sendImage(w, r, img, cacheRevalidate)
 }
 
-func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Image) {
+const (
+	cacheImmutable  = "public, max-age=86400"
+	cacheRevalidate = "no-cache"
+)
+
+func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Image, cacheControl string) {
 	if etagMatches(r.Header.Get("If-None-Match"), img.ETag) {
-		setCacheHeaders(w, img)
+		setCacheHeaders(w, img, cacheControl)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	if r.Method == http.MethodHead {
-		setImageHeaders(w, img)
+		setImageHeaders(w, img, cacheControl)
 		return
 	}
 	body, err := img.Open(r.Context())
@@ -228,19 +233,19 @@ func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Imag
 		return
 	}
 	defer body.Close()
-	setImageHeaders(w, img)
+	setImageHeaders(w, img, cacheControl)
 	if _, err := io.Copy(w, body); err != nil {
 		h.log.WarnContext(r.Context(), "send image", slog.Any("error", err))
 	}
 }
 
-func setCacheHeaders(w http.ResponseWriter, img service.Image) {
+func setCacheHeaders(w http.ResponseWriter, img service.Image, cacheControl string) {
 	w.Header().Set("ETag", img.ETag)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", cacheControl)
 }
 
-func setImageHeaders(w http.ResponseWriter, img service.Image) {
-	setCacheHeaders(w, img)
+func setImageHeaders(w http.ResponseWriter, img service.Image, cacheControl string) {
+	setCacheHeaders(w, img, cacheControl)
 	w.Header().Set("Content-Type", img.ContentType)
 	w.Header().Set("Content-Disposition", "inline")
 }

@@ -3,6 +3,10 @@ include .env
 export
 endif
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+export VERSION
+LDFLAGS := -X main.version=$(VERSION)
+
 .PHONY: env build run-server run-worker docker-build up up-deps down logs test test-integration test-alerts cover lint load clean
 
 env:
@@ -11,8 +15,8 @@ env:
 	@echo "created .env with random passwords"
 
 build:
-	go build -o bin/server ./cmd/server
-	go build -o bin/worker ./cmd/worker
+	go build -ldflags "$(LDFLAGS)" -o bin/server ./cmd/server
+	go build -ldflags "$(LDFLAGS)" -o bin/worker ./cmd/worker
 
 run-server:
 	go run ./cmd/server
