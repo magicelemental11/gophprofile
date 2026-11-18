@@ -108,7 +108,7 @@ Server и worker отдают `/metrics` (Prometheus и OpenMetrics с exemplars
 | `http_requests_total` | counter | `method`, `route`, `code` | HTTP-запросы; `route` — шаблон chi, не сырой путь |
 | `http_request_duration_seconds` | histogram | `method`, `route` | время ответа |
 | `http_requests_in_flight` | gauge | | запросы в обработке |
-| `avatars_uploads_total` | counter | `status`: `success`, `rejected`, `error` | загрузки; `rejected` — ошибка клиента (формат, размер), `error` — сбой сервиса |
+| `avatars_uploads_total` | counter | `status`: `success`, `rejected`, `error` | загрузки; `rejected` — ошибка клиента (формат, размер, user id, оборванный запрос), `error` — сбой сервиса |
 | `avatars_upload_duration_seconds` | histogram | `status` | время загрузки |
 | `avatars_deletes_total` | counter | `status` | удаления |
 | `avatars_storage_bytes` | gauge | `user_id` | объём оригиналов пользователя |

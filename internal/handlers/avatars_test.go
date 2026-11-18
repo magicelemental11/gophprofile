@@ -31,6 +31,7 @@ type fakeService struct {
 	uploaded   []byte
 	uploadUser string
 	uploadName string
+	rejected   int
 	avatars    map[string]domain.Avatar
 	openErr    error
 	readErr    error
@@ -49,7 +50,7 @@ func (f *fakeService) MaxSize() int64 { return testMaxSize }
 func (f *fakeService) Upload(_ context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return domain.Avatar{}, fmt.Errorf("read upload: %w", err)
+		return domain.Avatar{}, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 	}
 	if f.uploadErr != nil {
 		return domain.Avatar{}, f.uploadErr
@@ -57,6 +58,8 @@ func (f *fakeService) Upload(_ context.Context, userID, fileName string, r io.Re
 	f.uploaded, f.uploadUser, f.uploadName = data, userID, fileName
 	return domain.Avatar{ID: "a1", UserID: userID, UploadStatus: domain.UploadUploaded, ProcessingStatus: domain.ProcessingPending, CreatedAt: created}, nil
 }
+
+func (f *fakeService) ObserveRejectedUpload(context.Context, time.Duration) { f.rejected++ }
 
 func (f *fakeService) Get(_ context.Context, id string) (domain.Avatar, error) {
 	a, ok := f.avatars[id]
@@ -143,10 +146,11 @@ func TestUploadCreated(t *testing.T) {
 
 func TestUploadErrors(t *testing.T) {
 	tests := map[string]struct {
-		req    func(t *testing.T) *http.Request
-		svcErr error
-		code   int
-		body   string
+		req      func(t *testing.T) *http.Request
+		svcErr   error
+		code     int
+		body     string
+		rejected bool
 	}{
 		"no user": {
 			req: func(t *testing.T) *http.Request {
@@ -154,7 +158,7 @@ func TestUploadErrors(t *testing.T) {
 				r.Header.Del("X-User-ID")
 				return r
 			},
-			code: http.StatusBadRequest, body: `{"error":"Missing X-User-ID header"}`,
+			code: http.StatusBadRequest, body: `{"error":"Missing X-User-ID header"}`, rejected: true,
 		},
 		"not multipart": {
 			req: func(*testing.T) *http.Request {
@@ -162,11 +166,21 @@ func TestUploadErrors(t *testing.T) {
 				r.Header.Set("X-User-ID", "u")
 				return r
 			},
-			code: http.StatusBadRequest, body: `{"error":"Invalid multipart form"}`,
+			code: http.StatusBadRequest, body: `{"error":"Invalid multipart form"}`, rejected: true,
 		},
 		"no file field": {
 			req:  func(t *testing.T) *http.Request { return multipartRequest(t, "avatar", []byte("x")) },
-			code: http.StatusBadRequest, body: `{"error":"Missing file field"}`,
+			code: http.StatusBadRequest, body: `{"error":"Missing file field"}`, rejected: true,
+		},
+		"client gone mid-file": {
+			req: func(t *testing.T) *http.Request {
+				r := multipartRequest(t, "file", []byte("x"))
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				r.Body = io.NopCloser(bytes.NewReader(body[:len(body)-10]))
+				return r
+			},
+			code: http.StatusBadRequest, body: `{"error":"Incomplete upload"}`,
 		},
 		"bad format": {
 			req:    func(t *testing.T) *http.Request { return multipartRequest(t, "file", []byte("x")) },
@@ -190,9 +204,15 @@ func TestUploadErrors(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			rec := serve(&fakeService{uploadErr: tt.svcErr}, tt.req(t))
+			svc := &fakeService{uploadErr: tt.svcErr}
+			rec := serve(svc, tt.req(t))
 			assert.Equal(t, tt.code, rec.Code)
 			assert.JSONEq(t, tt.body, rec.Body.String())
+			if tt.rejected {
+				assert.Equal(t, 1, svc.rejected, "counted as a rejected upload")
+			} else {
+				assert.Zero(t, svc.rejected, "outcome is left to the service")
+			}
 		})
 	}
 }

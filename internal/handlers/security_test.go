@@ -129,6 +129,7 @@ func TestWebUploadInvalidUserID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Invalid user ID")
 	assert.Nil(t, svc.uploaded)
+	assert.Equal(t, 1, svc.rejected)
 }
 
 func TestImageSecurityHeaders(t *testing.T) {

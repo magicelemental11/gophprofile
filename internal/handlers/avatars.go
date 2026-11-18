@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -26,6 +27,7 @@ var placeholder []byte
 type AvatarService interface {
 	MaxSize() int64
 	Upload(ctx context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error)
+	ObserveRejectedUpload(ctx context.Context, d time.Duration)
 	Get(ctx context.Context, id string) (domain.Avatar, error)
 	List(ctx context.Context, userID string) ([]domain.Avatar, error)
 	Open(ctx context.Context, id string, size domain.Size, format domain.Format) (service.Image, error)
@@ -122,11 +124,13 @@ func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 func (h *api) upload(w http.ResponseWriter, r *http.Request) {
+	att := h.attempt(r)
+	defer att.finish()
 	uid, ok := requireUserID(w, r)
 	if !ok {
 		return
 	}
-	a, err := h.receive(w, r, uid)
+	a, err := h.receive(w, r, att, uid)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -142,7 +146,29 @@ var (
 	errNoFile       = errors.New("missing file field")
 )
 
-func (h *api) receive(w http.ResponseWriter, r *http.Request, uid string) (domain.Avatar, error) {
+type uploadAttempt struct {
+	svc   AvatarService
+	r     *http.Request
+	start time.Time
+	sent  bool
+}
+
+func (h *api) attempt(r *http.Request) *uploadAttempt {
+	return &uploadAttempt{svc: h.svc, r: r, start: time.Now()}
+}
+
+func (u *uploadAttempt) upload(uid, fileName string, body io.Reader) (domain.Avatar, error) {
+	u.sent = true
+	return u.svc.Upload(u.r.Context(), uid, fileName, body)
+}
+
+func (u *uploadAttempt) finish() {
+	if !u.sent {
+		u.svc.ObserveRejectedUpload(u.r.Context(), time.Since(u.start))
+	}
+}
+
+func (h *api) receive(w http.ResponseWriter, r *http.Request, att *uploadAttempt, uid string) (domain.Avatar, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.svc.MaxSize()+multipartOverhead)
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -154,14 +180,14 @@ func (h *api) receive(w http.ResponseWriter, r *http.Request, uid string) (domai
 			return domain.Avatar{}, errNoFile
 		}
 		if err != nil {
-			return domain.Avatar{}, err
+			return domain.Avatar{}, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 		}
 		if part.FormName() != "file" {
 			_ = part.Close()
 			continue
 		}
 		defer part.Close()
-		return h.svc.Upload(r.Context(), uid, part.FileName(), part)
+		return att.upload(uid, part.FileName(), part)
 	}
 }
 
@@ -324,6 +350,8 @@ func (h *api) classify(ctx context.Context, err error) (int, errorBody) {
 		return http.StatusBadRequest, errorBody{Error: "Invalid multipart form"}
 	case errors.Is(err, errNoFile):
 		return http.StatusBadRequest, errorBody{Error: "Missing file field"}
+	case errors.Is(err, domain.ErrIncompleteUpload):
+		return http.StatusBadRequest, errorBody{Error: "Incomplete upload"}
 	case errors.Is(err, domain.ErrNotFound):
 		return http.StatusNotFound, errorBody{Error: "Avatar not found"}
 	case errors.Is(err, domain.ErrForbidden):

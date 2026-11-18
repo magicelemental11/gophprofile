@@ -9,11 +9,13 @@ var (
 	ErrInvalidFormat = errors.New("invalid file format")
 	ErrTooLarge      = errors.New("file too large")
 	ErrInvalidParam  = errors.New("invalid parameter")
+	// ErrIncompleteUpload means the request body ended or broke before the file was read.
+	ErrIncompleteUpload = errors.New("incomplete upload")
 )
 
 // IsClientError reports whether err is caused by the request rather than by a failure of the service.
 func IsClientError(err error) bool {
-	for _, target := range []error{ErrNotFound, ErrForbidden, ErrInvalidFormat, ErrTooLarge, ErrInvalidParam} {
+	for _, target := range []error{ErrNotFound, ErrForbidden, ErrInvalidFormat, ErrTooLarge, ErrInvalidParam, ErrIncompleteUpload} {
 		if errors.Is(err, target) {
 			return true
 		}

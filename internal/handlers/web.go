@@ -71,7 +71,9 @@ func (h *webHandler) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *webHandler) upload(w http.ResponseWriter, r *http.Request) {
-	uid, err := h.receiveForm(w, r)
+	att := h.attempt(r)
+	defer att.finish()
+	uid, err := h.receiveForm(w, r, att)
 	switch {
 	case errors.Is(err, errNoUser):
 		h.render(w, r, http.StatusBadRequest, pageData{Error: "Missing user ID"})
@@ -84,7 +86,7 @@ func (h *webHandler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request) (string, error) {
+func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request, att *uploadAttempt) (string, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.svc.MaxSize()+multipartOverhead)
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -100,14 +102,14 @@ func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request) (string
 			return uid, errNoFile
 		}
 		if err != nil {
-			return uid, err
+			return uid, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 		}
 		switch part.FormName() {
 		case "user_id":
 			v, err := io.ReadAll(io.LimitReader(part, maxUserIDField))
 			_ = part.Close()
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 			}
 			uid = strings.TrimSpace(string(v))
 		case "file":
@@ -118,7 +120,7 @@ func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request) (string
 			if !domain.ValidUserID(uid) {
 				return uid, errInvalidUser
 			}
-			_, err := h.svc.Upload(r.Context(), uid, part.FileName(), part)
+			_, err := att.upload(uid, part.FileName(), part)
 			return uid, err
 		default:
 			_ = part.Close()
