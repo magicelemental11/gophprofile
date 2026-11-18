@@ -29,7 +29,7 @@ tests:
     interval: 1m
     input_series:
       - series: 'avatars_uploads_total{status="success"}'
-        values: '0+20x20'
+        values: '0+10x20'
       - series: 'avatars_uploads_total{status="rejected"}'
         values: '0+10x20'
       - series: 'avatars_uploads_total{status="error"}'
@@ -93,6 +93,18 @@ tests:
               summary: More than 5% of HTTP requests end with 5xx
               description: "10% of requests returned 5xx over the last 5 minutes."
               runbook_url: https://github.com/magicelemental11/gophprofile#httphigherrorrate
+
+  - name: failing health checks do not fire HTTPHighErrorRate
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{method="GET",route="/api/v1/avatars/{id}",code="200"}'
+        values: '0+1x20'
+      - series: 'http_requests_total{method="GET",route="/health",code="503"}'
+        values: '0+6x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HTTPHighErrorRate
+        exp_alerts: []
 
   - name: 4xx do not fire HTTPHighErrorRate
     interval: 1m

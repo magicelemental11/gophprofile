@@ -26,8 +26,8 @@ groups:
 
       - alert: HTTPHighErrorRate
         expr: |
-          sum(rate(http_requests_total{code=~"5.."}[5m]))
-            / sum(rate(http_requests_total[5m])) > 0.05
+          sum(rate(http_requests_total{route!="/health",code=~"5.."}[5m]))
+            / sum(rate(http_requests_total{route!="/health"}[5m])) > 0.05
         for: 5m
         labels:
           severity: warning

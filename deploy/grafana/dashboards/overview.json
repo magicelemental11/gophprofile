@@ -215,7 +215,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum(rate(http_requests_total[$interval]))",
+          "expr": "sum(rate(http_requests_total{route!=\"/health\"}[$interval]))",
           "legendFormat": "__auto",
           "range": true,
           "instant": false
@@ -280,7 +280,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "(sum(rate(http_requests_total{code=~\"5..\"}[$interval])) or vector(0)) / sum(rate(http_requests_total[$interval]))",
+          "expr": "(sum(rate(http_requests_total{route!=\"/health\",code=~\"5..\"}[$interval])) or vector(0)) / sum(rate(http_requests_total{route!=\"/health\"}[$interval]))",
           "legendFormat": "__auto",
           "range": true,
           "instant": false
@@ -349,7 +349,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[$interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{route!=\"/health\"}[$interval])))",
           "legendFormat": "__auto",
           "range": true,
           "instant": false
@@ -906,7 +906,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (class) (label_replace(rate(http_requests_total[$interval]), \"class\", \"${1}xx\", \"code\", \"(.)..\"))",
+          "expr": "sum by (class) (label_replace(rate(http_requests_total{route!=\"/health\"}[$interval]), \"class\", \"${1}xx\", \"code\", \"(.)..\"))",
           "legendFormat": "{{class}}",
           "range": true,
           "instant": false
@@ -976,7 +976,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_request_duration_seconds_bucket[$interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_request_duration_seconds_bucket{route!=\"/health\"}[$interval])))",
           "legendFormat": "p50",
           "range": true,
           "instant": false
@@ -987,7 +987,7 @@
             "uid": "prometheus"
           },
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[$interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{route!=\"/health\"}[$interval])))",
           "legendFormat": "p95",
           "range": true,
           "instant": false,
@@ -999,7 +999,7 @@
             "uid": "prometheus"
           },
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[$interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{route!=\"/health\"}[$interval])))",
           "legendFormat": "p99",
           "range": true,
           "instant": false
