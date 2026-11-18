@@ -255,3 +255,15 @@ func TestHandleMetrics(t *testing.T) {
 	assert.Equal(t, []string{operationDelete, operationProcess}, m.retried)
 	assert.Equal(t, []string{operationProcess, operationDelete}, m.deadLettered)
 }
+
+func TestHandleDuplicateIsSkipped(t *testing.T) {
+	p := &fakeProcessor{errs: []error{service.ErrDuplicate}}
+	w, sleeps, m := newObservedWorker(p, 5)
+
+	require.NoError(t, w.Handle(context.Background(), Message{ID: "m1", RoutingKey: domain.RoutingUploaded, Body: body(t, domain.AvatarUploadEvent{AvatarID: "a1"})}))
+	assert.Equal(t, 1, p.calls, "not retried")
+	assert.Empty(t, sleeps.delays)
+	assert.Empty(t, p.failed)
+	assert.Empty(t, m.deadLettered)
+	assert.Equal(t, []observed{{operationProcess, domain.OutcomeSkipped}}, m.messages)
+}

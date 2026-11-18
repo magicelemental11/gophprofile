@@ -61,8 +61,8 @@ func TestProcessIsIdempotent(t *testing.T) {
 	puts := e.store.puts
 	before, _ := e.repo.Get(context.Background(), a.ID)
 
-	require.NoError(t, p.Process(context.Background(), msg, processEvent(a.ID)), "same message")
-	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), "duplicate event, already completed")
+	require.ErrorIs(t, p.Process(context.Background(), msg, processEvent(a.ID)), ErrDuplicate, "same message")
+	require.ErrorIs(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), ErrDuplicate, "duplicate event, already completed")
 
 	after, _ := e.repo.Get(context.Background(), a.ID)
 	assert.Equal(t, puts, e.store.puts, "no extra uploads")
@@ -262,7 +262,7 @@ func TestDeleteFilesIsIdempotent(t *testing.T) {
 	e.repo.processed[msg] = true
 	e.store.delErr = errBoom
 
-	require.NoError(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}))
+	require.ErrorIs(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}), ErrDuplicate)
 	assert.True(t, e.store.has(a.S3Key))
 }
 

@@ -18,6 +18,9 @@ import (
 // ErrPermanent marks failures that retrying cannot fix.
 var ErrPermanent = errors.New("permanent failure")
 
+// ErrDuplicate means the message was already handled and nothing was done.
+var ErrDuplicate = errors.New("message already handled")
+
 // Processor implements the background work: thumbnails and file cleanup.
 type Processor struct {
 	repo  AvatarRepository
@@ -31,12 +34,12 @@ func NewProcessor(repo AvatarRepository, store ObjectStorage, log *slog.Logger) 
 }
 
 // Process generates the requested thumbnails. A repeated message or thumbnails that already
-// exist are skipped, and thumbnails of a deleted avatar are removed, so redelivery is safe.
-// Errors wrapping ErrPermanent must not be retried.
+// exist are skipped with ErrDuplicate, and thumbnails of a deleted avatar are removed, so
+// redelivery is safe. Errors wrapping ErrPermanent must not be retried.
 func (p *Processor) Process(ctx context.Context, messageID string, ev domain.AvatarProcessEvent) error {
 	ctx, span := startSpan(ctx, "process_avatar", attribute.String("avatar_id", ev.AvatarID), attribute.String("messaging.message.id", messageID))
 	err := p.process(ctx, messageID, ev)
-	endSpan(span, err)
+	endMessageSpan(span, err)
 	return err
 }
 
@@ -49,8 +52,7 @@ func (p *Processor) process(ctx context.Context, messageID string, ev domain.Ava
 			return fmt.Errorf("%w: unsupported operation %s %s", ErrPermanent, op.Type, op.Size)
 		}
 	}
-	done, err := p.repo.IsProcessed(ctx, messageID)
-	if err != nil || done {
+	if err := p.skipDuplicate(ctx, messageID); err != nil {
 		return err
 	}
 	a, err := p.repo.Get(ctx, ev.AvatarID)
@@ -65,7 +67,10 @@ func (p *Processor) process(ctx context.Context, messageID string, ev domain.Ava
 		return fmt.Errorf("%w: avatar %s is %s", ErrPermanent, a.ID, a.UploadStatus)
 	}
 	if a.ProcessingStatus == domain.ProcessingCompleted && hasAll(a, ev.Operations) {
-		return p.repo.MarkProcessed(ctx, messageID)
+		if err := p.repo.MarkProcessed(ctx, messageID); err != nil {
+			return err
+		}
+		return ErrDuplicate
 	}
 
 	err = p.repo.SetProcessingStatus(ctx, a.ID, domain.ProcessingProcessing)
@@ -93,6 +98,17 @@ func (p *Processor) process(ctx context.Context, messageID string, ev domain.Ava
 	if !ok {
 		p.log.InfoContext(ctx, "avatar deleted during processing", slog.String("avatar_id", a.ID))
 		return p.removeThumbnails(ctx, a.ID)
+	}
+	return nil
+}
+
+func (p *Processor) skipDuplicate(ctx context.Context, messageID string) error {
+	done, err := p.repo.IsProcessed(ctx, messageID)
+	if err != nil {
+		return err
+	}
+	if done {
+		return ErrDuplicate
 	}
 	return nil
 }
@@ -161,12 +177,12 @@ func (p *Processor) thumbnails(ctx context.Context, a domain.Avatar, ops []domai
 
 // DeleteFiles removes the original and all thumbnails of a deleted avatar. Keys that belong
 // to another avatar or an avatar that is not deleted make the message permanently invalid.
-// A repeated message is skipped.
+// A repeated message is skipped with ErrDuplicate.
 func (p *Processor) DeleteFiles(ctx context.Context, messageID string, ev domain.AvatarDeleteEvent) error {
 	ctx, span := startSpan(ctx, "delete_files",
 		attribute.String("avatar_id", ev.AvatarID), attribute.String("messaging.message.id", messageID), attribute.Int("keys", len(ev.S3Keys)))
 	err := p.deleteFiles(ctx, messageID, ev)
-	endSpan(span, err)
+	endMessageSpan(span, err)
 	return err
 }
 
@@ -183,11 +199,10 @@ func (p *Processor) deleteFiles(ctx context.Context, messageID string, ev domain
 			keys = append(keys, k)
 		}
 	}
-	done, err := p.repo.IsProcessed(ctx, messageID)
-	if err != nil || done {
+	if err := p.skipDuplicate(ctx, messageID); err != nil {
 		return err
 	}
-	_, err = p.repo.Get(ctx, ev.AvatarID)
+	_, err := p.repo.Get(ctx, ev.AvatarID)
 	if err == nil {
 		return fmt.Errorf("%w: avatar %s is not deleted", ErrPermanent, ev.AvatarID)
 	}

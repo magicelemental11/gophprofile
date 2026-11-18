@@ -77,3 +77,18 @@ func TestProcessSpan(t *testing.T) {
 	assert.Equal(t, a.ID, telemetrytest.Attrs(s)["avatar_id"].AsString())
 	assert.Equal(t, msg, telemetrytest.Attrs(s)["messaging.message.id"].AsString())
 }
+
+func TestDuplicateMessageSpanIsNotAnError(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	msg := uuid.NewString()
+	p := newProcessor(e)
+	require.NoError(t, p.Process(context.Background(), msg, processEvent(a.ID)))
+	rec := telemetrytest.Record(t)
+
+	require.ErrorIs(t, p.Process(context.Background(), msg, processEvent(a.ID)), ErrDuplicate)
+
+	s := telemetrytest.Ended(t, rec, "process_avatar")
+	assert.Equal(t, codes.Unset, s.Status().Code)
+	assert.True(t, telemetrytest.Attrs(s)["messaging.duplicate"].AsBool())
+}

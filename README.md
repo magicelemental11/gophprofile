@@ -115,7 +115,7 @@ Server и worker отдают `/metrics` (Prometheus и OpenMetrics с exemplars
 | `avatars_storage_total_bytes` | gauge | | объём всех оригиналов |
 | `avatars_total` | gauge | `processing_status` | аватары по статусу обработки |
 | `outbox_pending_events` | gauge | | события, ещё не отправленные в RabbitMQ |
-| `avatars_processing_total` | counter | `operation`: `process`, `delete`; `status` | сообщения, обработанные воркером |
+| `avatars_processing_total` | counter | `operation`: `process`, `delete`; `status`: `success`, `error`, `skipped` | сообщения, обработанные воркером; `skipped` — повтор уже обработанного |
 | `avatars_processing_duration_seconds` | histogram | `operation` | время обработки сообщения вместе с ретраями |
 | `worker_retries_total` | counter | `operation` | повторные попытки |
 | `worker_dead_lettered_total` | counter | `operation` | сообщения, отправленные в DLQ |

@@ -26,15 +26,20 @@ func IsClientError(err error) bool {
 // Outcome is how an operation ended, as reported to monitoring.
 type Outcome string
 
-// Outcomes: rejected is a client error such as a bad file, error is a failure of the service.
+// Outcomes: rejected is a client error such as a bad file, error is a failure of the service,
+// skipped is a repeated broker message that needed no work.
 const (
 	OutcomeSuccess  Outcome = "success"
 	OutcomeRejected Outcome = "rejected"
 	OutcomeError    Outcome = "error"
+	OutcomeSkipped  Outcome = "skipped"
 )
 
-// Outcomes lists every Outcome.
+// Outcomes lists the outcomes of API operations.
 var Outcomes = []Outcome{OutcomeSuccess, OutcomeRejected, OutcomeError}
+
+// MessageOutcomes lists the outcomes of broker messages handled by the worker.
+var MessageOutcomes = []Outcome{OutcomeSuccess, OutcomeError, OutcomeSkipped}
 
 // OutcomeOf classifies the error an operation returned.
 func OutcomeOf(err error) Outcome {

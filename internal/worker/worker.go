@@ -70,7 +70,12 @@ func (w *Worker) Handle(ctx context.Context, m Message) error {
 	op := operationOf(m.RoutingKey)
 	log := w.log.With(slog.String("message_id", m.ID), slog.String("routing_key", m.RoutingKey))
 	err := w.handle(ctx, m, op, log)
-	w.metrics.ObserveMessage(ctx, op, domain.OutcomeOf(err), time.Since(start))
+	outcome := domain.OutcomeOf(err)
+	if errors.Is(err, service.ErrDuplicate) {
+		outcome, err = domain.OutcomeSkipped, nil
+		log.InfoContext(ctx, "message already handled")
+	}
+	w.metrics.ObserveMessage(ctx, op, outcome, time.Since(start))
 	if err != nil {
 		w.metrics.DeadLettered(op)
 		log.ErrorContext(ctx, "message failed", slog.Any("error", err))
@@ -109,6 +114,9 @@ func (w *Worker) handle(ctx context.Context, m Message, op string, log *slog.Log
 	}
 
 	err := w.retry(ctx, op, log, func() error { return w.proc.Process(ctx, m.ID, ev) })
+	if errors.Is(err, service.ErrDuplicate) {
+		return err
+	}
 	if err != nil {
 		if errFail := w.proc.MarkFailed(context.WithoutCancel(ctx), ev.AvatarID); errFail != nil {
 			log.ErrorContext(ctx, "mark avatar failed", slog.String("avatar_id", ev.AvatarID), slog.Any("error", errFail))
@@ -141,7 +149,7 @@ func decode(body []byte, v any) error {
 func (w *Worker) retry(ctx context.Context, op string, log *slog.Logger, fn func() error) error {
 	var err error
 	for attempt := range w.maxRetries {
-		if err = fn(); err == nil || errors.Is(err, service.ErrPermanent) {
+		if err = fn(); err == nil || errors.Is(err, service.ErrPermanent) || errors.Is(err, service.ErrDuplicate) {
 			return err
 		}
 		if attempt == w.maxRetries-1 {

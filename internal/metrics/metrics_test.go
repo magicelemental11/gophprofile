@@ -79,11 +79,13 @@ func TestKnownSeriesStartAtZero(t *testing.T) {
 		`avatars_uploads_total{status="error"} 0`,
 		`avatars_deletes_total{status="success"} 0`,
 		`avatars_processing_total{operation="delete",status="error"} 0`,
+		`avatars_processing_total{operation="process",status="skipped"} 0`,
 		`worker_retries_total{operation="process"} 0`,
 		`worker_dead_lettered_total{operation="delete"} 0`,
 	} {
 		assert.Contains(t, out, s)
 	}
+	assert.NotContains(t, out, `avatars_processing_total{operation="process",status="rejected"}`)
 }
 
 func TestHTTPMetrics(t *testing.T) {

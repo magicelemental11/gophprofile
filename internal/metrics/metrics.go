@@ -77,7 +77,7 @@ func (m *Metrics) initSeries() {
 	for _, op := range []string{domain.OperationProcess, domain.OperationDelete} {
 		m.retries.WithLabelValues(op)
 		m.deadLettered.WithLabelValues(op)
-		for _, o := range domain.Outcomes {
+		for _, o := range domain.MessageOutcomes {
 			m.processed.WithLabelValues(op, string(o))
 		}
 	}
