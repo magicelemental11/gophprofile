@@ -46,7 +46,7 @@ func New() *Metrics {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	f := factory{reg}
-	return &Metrics{
+	m := &Metrics{
 		reg: reg,
 		httpRequests: f.counter("http_requests_total", "HTTP requests by method, route and status code.",
 			"method", "route", "code"),
@@ -64,6 +64,24 @@ func New() *Metrics {
 			"operation"),
 		retries:      f.counter("worker_retries_total", "Retried message handling attempts.", "operation"),
 		deadLettered: f.counter("worker_dead_lettered_total", "Messages given up on and sent to the dead-letter queue.", "operation"),
+	}
+	m.initSeries()
+	return m
+}
+
+// initSeries exports the known label combinations at zero, so rates and alerts see 0
+// instead of a missing series before the first event.
+func (m *Metrics) initSeries() {
+	for _, o := range domain.Outcomes {
+		m.uploads.WithLabelValues(string(o))
+		m.deletes.WithLabelValues(string(o))
+	}
+	for _, op := range []string{domain.OperationProcess, domain.OperationDelete} {
+		m.retries.WithLabelValues(op)
+		m.deadLettered.WithLabelValues(op)
+		for _, o := range domain.Outcomes {
+			m.processed.WithLabelValues(op, string(o))
+		}
 	}
 }
 

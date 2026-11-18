@@ -31,6 +31,9 @@ const (
 	OutcomeError    Outcome = "error"
 )
 
+// Outcomes lists every Outcome.
+var Outcomes = []Outcome{OutcomeSuccess, OutcomeRejected, OutcomeError}
+
 // OutcomeOf classifies the error an operation returned.
 func OutcomeOf(err error) Outcome {
 	switch {

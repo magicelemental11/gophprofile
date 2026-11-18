@@ -72,6 +72,20 @@ func TestWorkerMetrics(t *testing.T) {
 	assert.Contains(t, scrape(t, m, false), `avatars_processing_duration_seconds_count{operation="process"} 1`)
 }
 
+func TestKnownSeriesStartAtZero(t *testing.T) {
+	out := scrape(t, New(), false)
+
+	for _, s := range []string{
+		`avatars_uploads_total{status="error"} 0`,
+		`avatars_deletes_total{status="success"} 0`,
+		`avatars_processing_total{operation="delete",status="error"} 0`,
+		`worker_retries_total{operation="process"} 0`,
+		`worker_dead_lettered_total{operation="delete"} 0`,
+	} {
+		assert.Contains(t, out, s)
+	}
+}
+
 func TestHTTPMetrics(t *testing.T) {
 	m := New()
 

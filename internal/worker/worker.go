@@ -44,8 +44,8 @@ type Metrics interface {
 
 // Operation names reported to Metrics.
 const (
-	operationProcess = "process"
-	operationDelete  = "delete"
+	operationProcess = domain.OperationProcess
+	operationDelete  = domain.OperationDelete
 	operationUnknown = "unknown"
 )
 

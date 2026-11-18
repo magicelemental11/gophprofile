@@ -72,6 +72,21 @@ Server и worker отправляют трейсы по OTLP/gRPC в Jaeger (`OT
 
 Jaeger 2.23 отдаёт список сервисов и поиск трейсов только через `/api/v3`, поэтому в Grafana включён флаг `jaegerEnableGrpcEndpoint`. Трейс по ID и переход из exemplar работают в Grafana, поиск трейсов по сервису — в UI Jaeger.
 
+В Grafana в папке GophProfile четыре дашборда (`deploy/grafana/dashboards`, подключаются provisioning-ом):
+
+- **Service overview** — состояние targets, RPS, доля 5xx, p95, загрузки в минуту, очереди и DLQ, outbox, последние ошибки из OpenSearch;
+- **RED** — rate, доля ошибок и p50/p95/p99 по `route` для HTTP и по операциям воркера, exemplars ведут в Jaeger;
+- **Resources** — CPU, память, горутины и GC процессов, пул PostgreSQL, очереди и consumers RabbitMQ, диск и запросы MinIO;
+- **Business KPIs** — загрузки и удаления по исходу, успешность и p95 загрузки, время обработки миниатюр, объём хранилища и топ-10 пользователей, ретраи и DLQ.
+
+Пороги цветов на stat-панелях совпадают с порогами алертов. Плагин OpenSearch для Grafana скачивается с grafana.com при первом старте. Нагрузку для графиков даёт `scripts/load.sh` (загрузки, чтение, миниатюры, отклонённые файлы и удаления; `DURATION=300` — пять минут).
+
+| Overview | RED |
+|---|---|
+| ![Service overview](docs/img/grafana-overview.png) | ![RED](docs/img/grafana-red.png) |
+| **Resources** | **Business KPIs** |
+| ![Resources](docs/img/grafana-resources.png) | ![Business KPIs](docs/img/grafana-business.png) |
+
 Логи server и worker — JSON (slog) с полями `service`, `level`, `msg`, `trace_id`, `span_id`, `request_id`, `user_id`, `avatar_id`, `route`, `status`. Docker отдаёт их драйвером `fluentd` в Fluent Bit (`deploy/fluent-bit`), тот разбирает JSON и пишет в OpenSearch в индексы `gophprofile-logs-YYYY.MM.DD`; строки не в JSON (например, паника) сохраняются в поле `log`. `docker compose logs` продолжает работать. Одноразовый контейнер `opensearch-init` (`deploy/opensearch/init.sh`) создаёт шаблон индекса, политику удаления индексов старше 7 дней, index pattern и сохранённые поиски, а также монитор Alerting `gophprofile-error-logs`: раз в минуту он проверяет, были ли записи `level:ERROR` за последние 5 минут. Примеры фильтров в Discover: `trace_id:<X-Trace-ID>`, `level:ERROR`, `service:gophprofile-worker and avatar_id:<id>`. Значение `trace_id` в Discover — ссылка на трейс в Jaeger.
 
 OpenSearch запускается без security-плагина и слушает только `127.0.0.1` — это стенд для разработки.
