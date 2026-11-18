@@ -55,32 +55,85 @@ docker compose up --build -d   # или make up
 
 Логины и пароли PostgreSQL, RabbitMQ и MinIO задаются только в `.env` (он не коммитится), без них `docker compose` не запустится. Пароли можно вписать в `.env` и вручную, но они попадают в URL подключения, поэтому должны быть URL-safe. PostgreSQL и RabbitMQ запоминают учётные данные при первом запуске, поэтому после их смены тома нужно пересоздать: `docker compose down -v`.
 
-Поднимаются server (`http://localhost:8080`), worker, PostgreSQL, RabbitMQ (management — `http://localhost:15672`) и MinIO (консоль — `http://localhost:9001`). Server и worker собираются в один образ из `docker/Dockerfile`. При потере соединения с RabbitMQ оба процесса завершаются, и Compose перезапускает их. Логи — `make logs`, остановка — `make down`.
+Поднимаются server (`http://localhost:8080`), worker, PostgreSQL, RabbitMQ (management — `http://localhost:15672`) и MinIO (консоль — `http://localhost:9001`). Server и worker собираются в один образ из `docker/Dockerfile`. При потере соединения с RabbitMQ оба процесса завершаются, и Compose перезапускает их. Логи — `make logs`, остановка — `make down`. Вместе с сервисом поднимается стек наблюдаемости, см. [Наблюдаемость](#наблюдаемость).
 
 MinIO запускается из образа `pgsty/minio` — официальные образы MinIO больше не публикуются.
 
-### Наблюдаемость
+## Наблюдаемость
+
+```
+ server, worker ──OTLP/gRPC :4317──▶ Jaeger ◀──────────────┐
+      │                                                    │ exemplars, trace по ID
+      ├── /metrics :9091 ──▶ Prometheus ──▶ Grafana ───────┘
+      │   RabbitMQ :15692 ──▶     │  rules          │ логи (плагин OpenSearch)
+      │   MinIO :9000     ──▶     ▼                 ▼
+      │                     Alertmanager ──webhook──▶ alert-receiver
+      │                                                ▲
+      └── stdout (JSON) ──fluentd──▶ Fluent Bit ──▶ OpenSearch ──monitor──┘
+                                                       ▲
+                                         OpenSearch Dashboards (Discover → trace_id → Jaeger)
+```
 
 | Сервис | Адрес | Что там |
 |---|---|---|
-| Jaeger | http://localhost:16686 | Трейсы: HTTP-запрос → сервис → PostgreSQL/S3 → outbox → RabbitMQ → worker |
-| Prometheus | http://localhost:9090 | Метрики server, worker, RabbitMQ, MinIO; Status → Targets |
+| Jaeger | http://localhost:16686 | Трейсы: HTTP-запрос → сервис → PostgreSQL/S3 → outbox → RabbitMQ → worker; System Architecture — граф зависимостей |
+| Prometheus | http://localhost:9090 | Метрики server, worker, RabbitMQ, MinIO, Alertmanager; Status → Targets, Alerts |
 | Alertmanager | http://localhost:9093 | Активные алерты и тишины; уведомления уходят webhook-ом в контейнер `alert-receiver` |
-| Grafana | http://localhost:3000 | Логин `admin`, пароль — `GRAFANA_ADMIN_PASSWORD` из `.env` |
+| Grafana | http://localhost:3000 | Логин `admin`, пароль — `GRAFANA_ADMIN_PASSWORD` из `.env`; дашборды в папке GophProfile |
 | OpenSearch Dashboards | http://localhost:5601 | Логи server и worker: Discover, сохранённые поиски «Ошибки» и «По trace_id», Alerting |
 
-Server и worker отправляют трейсы по OTLP/gRPC в Jaeger (`OTEL_EXPORTER_OTLP_ENDPOINT`) и отдают метрики на порту `9091` внутри сети Compose (`METRICS_ADDRESS`). Каждый ответ API содержит заголовок `X-Trace-ID` — по нему трейс находится в Jaeger. В Grafana у метрик-гистограмм есть exemplars со ссылкой на трейс.
+Переменные для наблюдаемости: `OTEL_EXPORTER_OTLP_ENDPOINT` (куда слать трейсы, в Compose `http://jaeger:4317`; пусто — трейсинг выключен), `METRICS_ADDRESS` (адрес `/metrics`, по умолчанию `:9091`), `GRAFANA_ADMIN_PASSWORD` (только в `.env`, генерирует `make env`).
+
+Весь стенд занимает около 3 ГБ памяти Docker, больше всего — OpenSearch (heap 512 МБ, около 1.2 ГБ на контейнер) и Grafana. На Linux OpenSearch требует `sysctl -w vm.max_map_count=262144`; Docker Desktop это уже настроил. При первом старте Grafana скачивает с grafana.com плагин OpenSearch.
+
+### Трейсы
+
+Server и worker отправляют трейсы по OTLP/gRPC в Jaeger. Один trace покрывает загрузку целиком: HTTP-спан, спаны сервиса, запросы PostgreSQL (`postgres.*` и otelpgx), `s3.put_object`, публикацию из outbox (контекст трейса хранится в строке `outbox.trace_context`), получение сообщения воркером, его спаны S3 и БД. Удаление — так же, до удаления файлов воркером. Ретраи воркера — события в спане.
+
+Каждый ответ API содержит заголовок `X-Trace-ID`:
+
+```sh
+curl -si -H 'X-User-ID: gopher' -F file=@cat.png localhost:8080/api/v1/avatars | grep -i x-trace-id
+# X-Trace-ID: 4bf92f3577b34da6a3ce929d0e0e4736  →  http://localhost:16686/trace/4bf92f3577b34da6a3ce929d0e0e4736
+```
 
 Jaeger 2.23 отдаёт список сервисов и поиск трейсов только через `/api/v3`, поэтому в Grafana включён флаг `jaegerEnableGrpcEndpoint`. Трейс по ID и переход из exemplar работают в Grafana, поиск трейсов по сервису — в UI Jaeger.
 
+### Метрики
+
+Server и worker отдают `/metrics` (Prometheus и OpenMetrics с exemplars `trace_id`):
+
+| Метрика | Тип | Метки | Что считает |
+|---|---|---|---|
+| `http_requests_total` | counter | `method`, `route`, `code` | HTTP-запросы; `route` — шаблон chi, не сырой путь |
+| `http_request_duration_seconds` | histogram | `method`, `route` | время ответа |
+| `http_requests_in_flight` | gauge | | запросы в обработке |
+| `avatars_uploads_total` | counter | `status`: `success`, `rejected`, `error` | загрузки; `rejected` — ошибка клиента (формат, размер), `error` — сбой сервиса |
+| `avatars_upload_duration_seconds` | histogram | `status` | время загрузки |
+| `avatars_deletes_total` | counter | `status` | удаления |
+| `avatars_storage_bytes` | gauge | `user_id` | объём оригиналов пользователя |
+| `avatars_storage_total_bytes` | gauge | | объём всех оригиналов |
+| `avatars_total` | gauge | `processing_status` | аватары по статусу обработки |
+| `outbox_pending_events` | gauge | | события, ещё не отправленные в RabbitMQ |
+| `avatars_processing_total` | counter | `operation`: `process`, `delete`; `status` | сообщения, обработанные воркером |
+| `avatars_processing_duration_seconds` | histogram | `operation` | время обработки сообщения вместе с ретраями |
+| `worker_retries_total` | counter | `operation` | повторные попытки |
+| `worker_dead_lettered_total` | counter | `operation` | сообщения, отправленные в DLQ |
+| `db_pool_connections` | gauge | `state`: `acquired`, `idle`, `total` | соединения пула pgx |
+| `db_pool_max_connections`, `db_pool_acquires_total`, `db_pool_empty_acquires_total`, `db_pool_empty_acquire_wait_seconds_total` | | | размер пула, выдачи соединений и ожидание свободного |
+
+Плюс стандартные `go_*` и `process_*`. Статистику хранилища, число аватаров и outbox отдаёт только server — запросом в PostgreSQL при каждом scrape. Счётчики по известным меткам начинаются с нуля, поэтому графики и алерты видят 0, а не пропуск. Prometheus также снимает RabbitMQ (`rabbitmq_detailed_queue_messages{queue}` и общие счётчики сообщений) и MinIO (`minio_s3_requests_total`, ёмкость дисков).
+
+### Дашборды
+
 В Grafana в папке GophProfile четыре дашборда (`deploy/grafana/dashboards`, подключаются provisioning-ом):
 
-- **Service overview** — состояние targets, RPS, доля 5xx, p95, загрузки в минуту, очереди и DLQ, outbox, последние ошибки из OpenSearch;
+- **Service overview** — состояние targets, RPS, доля 5xx, p95, загрузки в минуту, очереди и DLQ, outbox, число сработавших алертов, последние ошибки из OpenSearch;
 - **RED** — rate, доля ошибок и p50/p95/p99 по `route` для HTTP и по операциям воркера, exemplars ведут в Jaeger;
 - **Resources** — CPU, память, горутины и GC процессов, пул PostgreSQL, очереди и consumers RabbitMQ, диск и запросы MinIO;
 - **Business KPIs** — загрузки и удаления по исходу, успешность и p95 загрузки, время обработки миниатюр, объём хранилища и топ-10 пользователей, ретраи и DLQ.
 
-Пороги цветов на stat-панелях совпадают с порогами алертов. Плагин OpenSearch для Grafana скачивается с grafana.com при первом старте. Нагрузку для графиков даёт `scripts/load.sh` (загрузки, чтение, миниатюры, отклонённые файлы и удаления; `DURATION=300` — пять минут).
+Пороги цветов на stat-панелях совпадают с порогами алертов. Нагрузку для графиков даёт `make load` (`scripts/load.sh`: загрузки, чтение, миниатюры, отклонённые файлы и удаления в темпе ниже лимита загрузок; `DURATION=300` — пять минут). Скриншоты сняты во время остановки MinIO:
 
 | Overview | RED |
 |---|---|
@@ -88,7 +141,13 @@ Jaeger 2.23 отдаёт список сервисов и поиск трейс�
 | **Resources** | **Business KPIs** |
 | ![Resources](docs/img/grafana-resources.png) | ![Business KPIs](docs/img/grafana-business.png) |
 
-Логи server и worker — JSON (slog) с полями `service`, `level`, `msg`, `trace_id`, `span_id`, `request_id`, `user_id`, `avatar_id`, `route`, `status`. Docker отдаёт их драйвером `fluentd` в Fluent Bit (`deploy/fluent-bit`), тот разбирает JSON и пишет в OpenSearch в индексы `gophprofile-logs-YYYY.MM.DD`; строки не в JSON (например, паника) сохраняются в поле `log`. `docker compose logs` продолжает работать. Одноразовый контейнер `opensearch-init` (`deploy/opensearch/init.sh`) создаёт шаблон индекса, политику удаления индексов старше 7 дней, index pattern и сохранённые поиски, а также монитор Alerting `gophprofile-error-logs`: раз в минуту он проверяет, были ли записи `level:ERROR` за последние 5 минут, и если были — отправляет webhook в тот же `alert-receiver` (канал Notifications `gophprofile-alert-receiver`, не чаще раза в 10 минут). Примеры фильтров в Discover: `trace_id:<X-Trace-ID>`, `level:ERROR`, `service:gophprofile-worker and avatar_id:<id>`. Значение `trace_id` в Discover — ссылка на трейс в Jaeger.
+### Логи
+
+Логи server и worker — JSON (slog) с полями `service`, `level`, `msg`, `trace_id`, `span_id`, `request_id`, `user_id`, `avatar_id`, `route`, `status`. Docker отдаёт их драйвером `fluentd` в Fluent Bit (`deploy/fluent-bit`), тот разбирает JSON и пишет в OpenSearch в индексы `gophprofile-logs-YYYY.MM.DD`; строки не в JSON (например, паника) сохраняются в поле `log`. `docker compose logs` продолжает работать.
+
+Одноразовый контейнер `opensearch-init` (`deploy/opensearch/init.sh`) создаёт шаблон индекса, политику удаления индексов старше 7 дней, index pattern, сохранённые поиски, канал Notifications `gophprofile-alert-receiver` и монитор Alerting `gophprofile-error-logs`: раз в минуту он проверяет, были ли записи `level:ERROR` за последние 5 минут, и если были — отправляет webhook в `alert-receiver` (не чаще раза в 10 минут).
+
+Примеры фильтров в Discover: `trace_id:<X-Trace-ID>`, `level:ERROR`, `user_id:gopher`, `service:gophprofile-worker and avatar_id:<id>`. Значение `trace_id` в Discover — ссылка на трейс в Jaeger. Последние ошибки видны и на overview-дашборде Grafana.
 
 OpenSearch запускается без security-плагина и слушает только `127.0.0.1` — это стенд для разработки.
 
@@ -246,6 +305,7 @@ make test               # unit-тесты с -race
 make cover              # покрытие unit-тестами (без cmd/)
 make test-integration   # unit + интеграционные; нужен Docker, PostgreSQL, MinIO и RabbitMQ поднимаются через testcontainers
 make lint               # golangci-lint v2
+make test-alerts        # конфиги Prometheus и Alertmanager, promtool test rules; нужен Docker
 ```
 
-Интеграционные тесты помечены build-тегом `integration`. В CI (`.github/workflows/test.yml`) линтер, unit-тесты с покрытием и интеграционные тесты идут отдельными job.
+Интеграционные тесты помечены build-тегом `integration`. Тесты трейсинга работают на in-memory exporter (`internal/telemetry/telemetrytest`), метрик — на отдельном registry. В CI (`.github/workflows/test.yml`) отдельными job идут линтер, unit-тесты с покрытием, интеграционные тесты, `make test-alerts` и проверка `docker compose config`.

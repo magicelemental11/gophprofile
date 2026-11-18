@@ -38,6 +38,15 @@ jobs:
       - name: Alert rules
         run: make test-alerts
 
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate .env
+        run: make env
+      - name: Validate Compose file
+        run: docker compose config --quiet
+
   integration:
     runs-on: ubuntu-latest
     steps:

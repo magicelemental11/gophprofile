@@ -43,8 +43,11 @@ test-integration:
 
 PROMETHEUS_IMAGE ?= prom/prometheus:v3.15.1
 
+ALERTMANAGER_IMAGE ?= prom/alertmanager:v0.34.2
+
 test-alerts:
-	docker run --rm -v "$(CURDIR)/deploy/prometheus:/rules:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) check rules /rules/alerts.yml
+	docker run --rm -v "$(CURDIR)/deploy/prometheus:/rules:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) check config /rules/prometheus.yml
+	docker run --rm -v "$(CURDIR)/deploy/alertmanager:/config:ro" --entrypoint amtool $(ALERTMANAGER_IMAGE) check-config /config/alertmanager.yml
 	docker run --rm -v "$(CURDIR)/deploy/prometheus:/rules:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) test rules /rules/alerts_test.yml
 
 cover:
