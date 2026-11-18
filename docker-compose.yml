@@ -17,6 +17,14 @@ x-app: &app
     UPLOAD_RATE_LIMIT: ${UPLOAD_RATE_LIMIT:-10}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     METRICS_ADDRESS: ":9091"
+  # Logs go to Fluent Bit and on to OpenSearch; Docker keeps a local copy for `docker compose logs`.
+  # The async driver buffers and reconnects, so the app does not wait for the logging stack.
+  logging:
+    driver: fluentd
+    options:
+      fluentd-address: localhost:24224
+      fluentd-async: "true"
+      tag: gophprofile.{{.Name}}
   depends_on:
     jaeger:
       condition: service_started
@@ -127,7 +135,60 @@ services:
       - prometheus
       - jaeger
 
+  opensearch:
+    image: opensearchproject/opensearch:2.19.6
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.19.6
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "127.0.0.1:5601:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  opensearch-init:
+    image: opensearchproject/opensearch:2.19.6
+    entrypoint: ["/init/init.sh"]
+    restart: "no"
+    volumes:
+      - ./deploy/opensearch:/init:ro
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      opensearch-dashboards:
+        condition: service_started
+
+  fluent-bit:
+    image: fluent/fluent-bit:5.1.3
+    command: ["/fluent-bit/bin/fluent-bit", "--config=/fluent-bit/etc/fluent-bit.yaml"]
+    ports:
+      - "127.0.0.1:24224:24224"
+    volumes:
+      - ./deploy/fluent-bit/fluent-bit.yaml:/fluent-bit/etc/fluent-bit.yaml:ro
+    # The index template must exist before the first log line creates an index.
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
+
 volumes:
+  opensearch-data:
   postgres-data:
   rabbitmq-data:
   minio-data:

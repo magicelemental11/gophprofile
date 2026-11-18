@@ -1,0 +1,12 @@
+{
+  "attributes": {
+    "title": "Ошибки",
+    "description": "Записи уровня ERROR и строки, не разобранные как JSON (паники).",
+    "columns": ["service", "msg", "error", "trace_id", "avatar_id", "log"],
+    "sort": [["@timestamp", "desc"]],
+    "kibanaSavedObjectMeta": {
+      "searchSourceJSON": "{\"query\":{\"query\":\"level:ERROR or (log:* and not level:*)\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"
+    }
+  },
+  "references": [{"name": "kibanaSavedObjectMeta.searchSourceJSON.index", "type": "index-pattern", "id": "gophprofile-logs"}]
+}

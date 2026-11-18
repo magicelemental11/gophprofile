@@ -66,10 +66,15 @@ MinIO запускается из образа `pgsty/minio` — официал�
 | Jaeger | http://localhost:16686 | Трейсы: HTTP-запрос → сервис → PostgreSQL/S3 → outbox → RabbitMQ → worker |
 | Prometheus | http://localhost:9090 | Метрики server, worker, RabbitMQ, MinIO; Status → Targets |
 | Grafana | http://localhost:3000 | Логин `admin`, пароль — `GRAFANA_ADMIN_PASSWORD` из `.env` |
+| OpenSearch Dashboards | http://localhost:5601 | Логи server и worker: Discover, сохранённые поиски «Ошибки» и «По trace_id», Alerting |
 
 Server и worker отправляют трейсы по OTLP/gRPC в Jaeger (`OTEL_EXPORTER_OTLP_ENDPOINT`) и отдают метрики на порту `9091` внутри сети Compose (`METRICS_ADDRESS`). Каждый ответ API содержит заголовок `X-Trace-ID` — по нему трейс находится в Jaeger. В Grafana у метрик-гистограмм есть exemplars со ссылкой на трейс.
 
 Jaeger 2.23 отдаёт список сервисов и поиск трейсов только через `/api/v3`, поэтому в Grafana включён флаг `jaegerEnableGrpcEndpoint`. Трейс по ID и переход из exemplar работают в Grafana, поиск трейсов по сервису — в UI Jaeger.
+
+Логи server и worker — JSON (slog) с полями `service`, `level`, `msg`, `trace_id`, `span_id`, `request_id`, `user_id`, `avatar_id`, `route`, `status`. Docker отдаёт их драйвером `fluentd` в Fluent Bit (`deploy/fluent-bit`), тот разбирает JSON и пишет в OpenSearch в индексы `gophprofile-logs-YYYY.MM.DD`; строки не в JSON (например, паника) сохраняются в поле `log`. `docker compose logs` продолжает работать. Одноразовый контейнер `opensearch-init` (`deploy/opensearch/init.sh`) создаёт шаблон индекса, политику удаления индексов старше 7 дней, index pattern и сохранённые поиски, а также монитор Alerting `gophprofile-error-logs`: раз в минуту он проверяет, были ли записи `level:ERROR` за последние 5 минут. Примеры фильтров в Discover: `trace_id:<X-Trace-ID>`, `level:ERROR`, `service:gophprofile-worker and avatar_id:<id>`. Значение `trace_id` в Discover — ссылка на трейс в Jaeger.
+
+OpenSearch запускается без security-плагина и слушает только `127.0.0.1` — это стенд для разработки.
 
 ## Запуск для разработки
 

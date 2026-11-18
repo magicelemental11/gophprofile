@@ -1,0 +1,7 @@
+{
+  "attributes": {
+    "title": "gophprofile-logs-*",
+    "timeFieldName": "@timestamp",
+    "fieldFormatMap": "{\"trace_id\":{\"id\":\"url\",\"params\":{\"urlTemplate\":\"http://localhost:16686/trace/{{value}}\",\"labelTemplate\":\"{{value}}\"}}}"
+  }
+}

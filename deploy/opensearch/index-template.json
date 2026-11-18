@@ -1,0 +1,39 @@
+{
+  "index_patterns": ["gophprofile-logs-*"],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic_templates": [
+        {"strings_as_keywords": {"match_mapping_type": "string", "mapping": {"type": "keyword", "ignore_above": 1024}}}
+      ],
+      "properties": {
+        "@timestamp": {"type": "date_nanos"},
+        "time": {"type": "date_nanos"},
+        "level": {"type": "keyword"},
+        "msg": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
+        "error": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
+        "log": {"type": "text"},
+        "service": {"type": "keyword"},
+        "trace_id": {"type": "keyword"},
+        "span_id": {"type": "keyword"},
+        "request_id": {"type": "keyword"},
+        "user_id": {"type": "keyword"},
+        "avatar_id": {"type": "keyword"},
+        "message_id": {"type": "keyword"},
+        "routing_key": {"type": "keyword"},
+        "method": {"type": "keyword"},
+        "route": {"type": "keyword"},
+        "path": {"type": "keyword"},
+        "status": {"type": "integer"},
+        "bytes": {"type": "long"},
+        "duration": {"type": "long"},
+        "container_name": {"type": "keyword"},
+        "container_id": {"type": "keyword"},
+        "source": {"type": "keyword"}
+      }
+    }
+  }
+}
