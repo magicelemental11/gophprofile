@@ -137,9 +137,12 @@ func TestLoadMetricsAddress(t *testing.T) {
 	srv, err := LoadServer(requiredArgs)
 	require.NoError(t, err)
 	assert.Equal(t, ":9091", srv.MetricsAddress)
+	w, err := LoadWorker(requiredArgs)
+	require.NoError(t, err)
+	assert.Equal(t, ":9092", w.MetricsAddress, "server and worker run side by side locally")
 
 	t.Setenv("METRICS_ADDRESS", ":9200")
-	w, err := LoadWorker(requiredArgs)
+	w, err = LoadWorker(requiredArgs)
 	require.NoError(t, err)
 	assert.Equal(t, ":9200", w.MetricsAddress)
 

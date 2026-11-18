@@ -82,7 +82,7 @@ MinIO запускается из образа `pgsty/minio` — официал�
 | Grafana | http://localhost:3000 | Логин `admin`, пароль — `GRAFANA_ADMIN_PASSWORD` из `.env`; дашборды в папке GophProfile |
 | OpenSearch Dashboards | http://localhost:5601 | Логи server и worker: Discover, сохранённые поиски «Ошибки» и «По trace_id», Alerting |
 
-Переменные для наблюдаемости: `OTEL_EXPORTER_OTLP_ENDPOINT` (куда слать трейсы, в Compose `http://jaeger:4317`; пусто — трейсинг выключен), `METRICS_ADDRESS` (адрес `/metrics`, по умолчанию `:9091`), `GRAFANA_ADMIN_PASSWORD` (только в `.env`, генерирует `make env`).
+Переменные для наблюдаемости: `OTEL_EXPORTER_OTLP_ENDPOINT` (куда слать трейсы, в Compose `http://jaeger:4317`; пусто — трейсинг выключен), `METRICS_ADDRESS` (адрес `/metrics`, по умолчанию `:9091` у сервера и `:9092` у воркера), `GRAFANA_ADMIN_PASSWORD` (только в `.env`, генерирует `make env`).
 
 Весь стенд занимает около 3 ГБ памяти Docker, больше всего — OpenSearch (heap 512 МБ, около 1.2 ГБ на контейнер) и Grafana. На Linux OpenSearch требует `sysctl -w vm.max_map_count=262144`; Docker Desktop это уже настроил. При первом старте Grafana скачивает с grafana.com плагин OpenSearch.
 
@@ -221,7 +221,7 @@ make run-worker
 | `S3_USE_SSL` | `-s3-use-ssl` | `false` | server, worker |
 | `LOG_LEVEL` | `-log-level` | `info` | server, worker |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `-otlp-endpoint` | пусто — трейсы не отправляются | server, worker |
-| `METRICS_ADDRESS` | `-metrics-address` | `:9091` — адрес `/metrics` | server, worker |
+| `METRICS_ADDRESS` | `-metrics-address` | `:9091` у server, `:9092` у worker — адрес `/metrics` | server, worker |
 | `ADDRESS` | `-a` | `:8080` | server |
 | `MAX_UPLOAD_SIZE` | `-max-upload-size` | `10485760` (10 МБ) | server |
 | `WEB_DIR` | `-web-dir` | `./web` | server |
