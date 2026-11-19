@@ -25,7 +25,7 @@ func serveWeb(t *testing.T, svc *fakeService, req *http.Request) *httptest.Respo
 	web, err := NewWeb(testWebFS)
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
-	NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Avatars: svc, Web: web}).ServeHTTP(rec, req)
+	NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Avatars: svc, Uploads: &svc.uploads, Web: web}).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -93,10 +93,11 @@ func TestWebUploadEscapesUserInLocation(t *testing.T) {
 
 func TestWebUploadErrors(t *testing.T) {
 	tests := map[string]struct {
-		req    func(t *testing.T) *http.Request
-		svcErr error
-		code   int
-		msg    string
+		req      func(t *testing.T) *http.Request
+		svcErr   error
+		code     int
+		msg      string
+		rejected bool
 	}{
 		"bad format": {
 			req:    func(t *testing.T) *http.Request { return webUploadRequest(t, "u1", []byte("x")) },
@@ -105,11 +106,11 @@ func TestWebUploadErrors(t *testing.T) {
 		},
 		"no user": {
 			req:  func(t *testing.T) *http.Request { return webUploadRequest(t, " ", []byte("x")) },
-			code: http.StatusBadRequest, msg: "Missing user ID",
+			code: http.StatusBadRequest, msg: "Missing user ID", rejected: true,
 		},
 		"no file": {
 			req:  func(t *testing.T) *http.Request { return webUploadRequest(t, "u1", nil) },
-			code: http.StatusBadRequest, msg: "Missing file field",
+			code: http.StatusBadRequest, msg: "Missing file field", rejected: true,
 		},
 		"too large": {
 			req:  func(t *testing.T) *http.Request { return webUploadRequest(t, "u1", make([]byte, testMaxSize+2<<20)) },
@@ -118,10 +119,16 @@ func TestWebUploadErrors(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			rec := serveWeb(t, &fakeService{uploadErr: tt.svcErr}, tt.req(t))
+			svc := &fakeService{uploadErr: tt.svcErr}
+			rec := serveWeb(t, svc, tt.req(t))
 			assert.Equal(t, tt.code, rec.Code)
 			assert.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"))
 			assert.Contains(t, rec.Body.String(), "error="+tt.msg)
+			if tt.rejected {
+				assert.Equal(t, 1, svc.uploads.rejected, "counted as a rejected upload")
+			} else {
+				assert.Zero(t, svc.uploads.rejected, "outcome is left to the service")
+			}
 		})
 	}
 }

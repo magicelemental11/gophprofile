@@ -8,9 +8,11 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -71,9 +73,14 @@ func (h *webHandler) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *webHandler) upload(w http.ResponseWriter, r *http.Request) {
-	att := h.attempt(r)
-	defer att.finish()
-	uid, err := h.receiveForm(w, r, att)
+	start := time.Now()
+	uid, file, err := h.receiveForm(w, r)
+	if err != nil {
+		h.uploads.ObserveUpload(r.Context(), domain.OutcomeRejected, time.Since(start))
+	} else {
+		defer file.Close()
+		_, err = h.svc.Upload(r.Context(), uid, file.FileName(), file)
+	}
 	switch {
 	case errors.Is(err, errNoUser):
 		h.render(w, r, http.StatusBadRequest, pageData{Error: "Missing user ID"})
@@ -86,42 +93,42 @@ func (h *webHandler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request, att *uploadAttempt) (string, error) {
+func (h *webHandler) receiveForm(w http.ResponseWriter, r *http.Request) (string, *multipart.Part, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.svc.MaxSize()+multipartOverhead)
 	mr, err := r.MultipartReader()
 	if err != nil {
-		return "", errNotMultipart
+		return "", nil, errNotMultipart
 	}
 	var uid string
 	for {
 		part, err := mr.NextPart()
 		if errors.Is(err, io.EOF) {
 			if uid == "" {
-				return "", errNoUser
+				return "", nil, errNoUser
 			}
-			return uid, errNoFile
+			return uid, nil, errNoFile
 		}
 		if err != nil {
-			return uid, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
+			return uid, nil, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 		}
 		switch part.FormName() {
 		case "user_id":
 			v, err := io.ReadAll(io.LimitReader(part, maxUserIDField))
 			_ = part.Close()
 			if err != nil {
-				return "", fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
+				return "", nil, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 			}
 			uid = strings.TrimSpace(string(v))
 		case "file":
-			defer part.Close()
-			if uid == "" {
-				return "", errNoUser
+			switch {
+			case uid == "":
+				_ = part.Close()
+				return "", nil, errNoUser
+			case !domain.ValidUserID(uid):
+				_ = part.Close()
+				return uid, nil, errInvalidUser
 			}
-			if !domain.ValidUserID(uid) {
-				return uid, errInvalidUser
-			}
-			_, err := att.upload(uid, part.FileName(), part)
-			return uid, err
+			return uid, part, nil
 		default:
 			_ = part.Close()
 		}

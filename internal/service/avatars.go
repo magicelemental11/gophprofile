@@ -58,12 +58,6 @@ func (s *AvatarService) Upload(ctx context.Context, userID, fileName string, r i
 	return a, err
 }
 
-// ObserveRejectedUpload records an upload refused before its file reached Upload, such as one
-// without a valid user id.
-func (s *AvatarService) ObserveRejectedUpload(ctx context.Context, d time.Duration) {
-	s.metrics.ObserveUpload(ctx, domain.OutcomeRejected, d)
-}
-
 func (s *AvatarService) upload(ctx context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error) {
 	span := trace.SpanFromContext(ctx)
 	data, err := io.ReadAll(io.LimitReader(r, s.maxSize+1))

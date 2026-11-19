@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,7 +28,6 @@ var placeholder []byte
 type AvatarService interface {
 	MaxSize() int64
 	Upload(ctx context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error)
-	ObserveRejectedUpload(ctx context.Context, d time.Duration)
 	Get(ctx context.Context, id string) (domain.Avatar, error)
 	List(ctx context.Context, userID string) ([]domain.Avatar, error)
 	Open(ctx context.Context, id string, size domain.Size, format domain.Format) (service.Image, error)
@@ -37,8 +37,9 @@ type AvatarService interface {
 }
 
 type api struct {
-	svc AvatarService
-	log *slog.Logger
+	svc     AvatarService
+	uploads UploadObserver
+	log     *slog.Logger
 }
 
 type uploadResponse struct {
@@ -124,13 +125,20 @@ func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 func (h *api) upload(w http.ResponseWriter, r *http.Request) {
-	att := h.attempt(r)
-	defer att.finish()
+	start := time.Now()
 	uid, ok := requireUserID(w, r)
 	if !ok {
+		h.uploads.ObserveUpload(r.Context(), domain.OutcomeRejected, time.Since(start))
 		return
 	}
-	a, err := h.receive(w, r, att, uid)
+	file, err := filePart(w, r, h.svc.MaxSize())
+	if err != nil {
+		h.uploads.ObserveUpload(r.Context(), domain.OutcomeRejected, time.Since(start))
+		h.fail(w, r, err)
+		return
+	}
+	defer file.Close()
+	a, err := h.svc.Upload(r.Context(), uid, file.FileName(), file)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -146,48 +154,24 @@ var (
 	errNoFile       = errors.New("missing file field")
 )
 
-type uploadAttempt struct {
-	svc   AvatarService
-	r     *http.Request
-	start time.Time
-	sent  bool
-}
-
-func (h *api) attempt(r *http.Request) *uploadAttempt {
-	return &uploadAttempt{svc: h.svc, r: r, start: time.Now()}
-}
-
-func (u *uploadAttempt) upload(uid, fileName string, body io.Reader) (domain.Avatar, error) {
-	u.sent = true
-	return u.svc.Upload(u.r.Context(), uid, fileName, body)
-}
-
-func (u *uploadAttempt) finish() {
-	if !u.sent {
-		u.svc.ObserveRejectedUpload(u.r.Context(), time.Since(u.start))
-	}
-}
-
-func (h *api) receive(w http.ResponseWriter, r *http.Request, att *uploadAttempt, uid string) (domain.Avatar, error) {
-	r.Body = http.MaxBytesReader(w, r.Body, h.svc.MaxSize()+multipartOverhead)
+func filePart(w http.ResponseWriter, r *http.Request, maxSize int64) (*multipart.Part, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize+multipartOverhead)
 	mr, err := r.MultipartReader()
 	if err != nil {
-		return domain.Avatar{}, errNotMultipart
+		return nil, errNotMultipart
 	}
 	for {
 		part, err := mr.NextPart()
 		if errors.Is(err, io.EOF) {
-			return domain.Avatar{}, errNoFile
+			return nil, errNoFile
 		}
 		if err != nil {
-			return domain.Avatar{}, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
+			return nil, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 		}
-		if part.FormName() != "file" {
-			_ = part.Close()
-			continue
+		if part.FormName() == "file" {
+			return part, nil
 		}
-		defer part.Close()
-		return att.upload(uid, part.FileName(), part)
+		_ = part.Close()
 	}
 }
 

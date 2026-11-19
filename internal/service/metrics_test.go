@@ -21,13 +21,12 @@ func TestUploadOutcomes(t *testing.T) {
 	require.Error(t, err)
 	_, err = e.svc.Upload(context.Background(), "u", "a.png", iotest.ErrReader(io.ErrUnexpectedEOF))
 	require.ErrorIs(t, err, domain.ErrIncompleteUpload, "client went away mid-upload")
-	e.svc.ObserveRejectedUpload(context.Background(), 0)
 	e.store.putFails = 1
 	_, err = e.svc.Upload(context.Background(), "u", "a.png", bytes.NewReader(pngBytes(t, 4, 4)))
 	require.Error(t, err)
 
 	assert.Equal(t, []domain.Outcome{
-		domain.OutcomeSuccess, domain.OutcomeRejected, domain.OutcomeRejected, domain.OutcomeRejected, domain.OutcomeError,
+		domain.OutcomeSuccess, domain.OutcomeRejected, domain.OutcomeRejected, domain.OutcomeError,
 	}, e.metrics.uploads)
 }
 

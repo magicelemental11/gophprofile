@@ -114,6 +114,7 @@ func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
 	router := handlers.NewRouter(handlers.Deps{
 		Logger:  lg,
 		Metrics: m,
+		Uploads: m,
 		Health:  map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
 		Avatars: service.NewAvatarService(repo, store, m, lg, cfg.MaxUploadSize),
 		Web:     web,

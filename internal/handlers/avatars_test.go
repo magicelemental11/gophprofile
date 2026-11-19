@@ -31,7 +31,7 @@ type fakeService struct {
 	uploaded   []byte
 	uploadUser string
 	uploadName string
-	rejected   int
+	uploads    fakeUploads
 	avatars    map[string]domain.Avatar
 	openErr    error
 	readErr    error
@@ -59,7 +59,13 @@ func (f *fakeService) Upload(_ context.Context, userID, fileName string, r io.Re
 	return domain.Avatar{ID: "a1", UserID: userID, UploadStatus: domain.UploadUploaded, ProcessingStatus: domain.ProcessingPending, CreatedAt: created}, nil
 }
 
-func (f *fakeService) ObserveRejectedUpload(context.Context, time.Duration) { f.rejected++ }
+type fakeUploads struct{ rejected int }
+
+func (f *fakeUploads) ObserveUpload(_ context.Context, o domain.Outcome, _ time.Duration) {
+	if o == domain.OutcomeRejected {
+		f.rejected++
+	}
+}
 
 func (f *fakeService) Get(_ context.Context, id string) (domain.Avatar, error) {
 	a, ok := f.avatars[id]
@@ -114,7 +120,7 @@ func (f *fakeService) DeleteCurrent(_ context.Context, requesterID, userID strin
 
 func serve(svc *fakeService, req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Avatars: svc}).ServeHTTP(rec, req)
+	NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Avatars: svc, Uploads: &svc.uploads}).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -209,9 +215,9 @@ func TestUploadErrors(t *testing.T) {
 			assert.Equal(t, tt.code, rec.Code)
 			assert.JSONEq(t, tt.body, rec.Body.String())
 			if tt.rejected {
-				assert.Equal(t, 1, svc.rejected, "counted as a rejected upload")
+				assert.Equal(t, 1, svc.uploads.rejected, "counted as a rejected upload")
 			} else {
-				assert.Zero(t, svc.rejected, "outcome is left to the service")
+				assert.Zero(t, svc.uploads.rejected, "outcome is left to the service")
 			}
 		})
 	}

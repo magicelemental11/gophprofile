@@ -14,6 +14,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/magicelemental11/gophprofile/internal/domain"
 )
 
 const (
@@ -27,10 +29,16 @@ type RequestObserver interface {
 	RequestFinished(ctx context.Context, method, route string, code int, d time.Duration)
 }
 
-// Deps holds what the router needs to serve requests; Metrics may be nil.
+// UploadObserver records uploads refused before their file reached the AvatarService.
+type UploadObserver interface {
+	ObserveUpload(ctx context.Context, outcome domain.Outcome, d time.Duration)
+}
+
+// Deps holds what the router needs to serve requests; Metrics and Uploads may be nil.
 type Deps struct {
 	Logger   *slog.Logger
 	Metrics  RequestObserver
+	Uploads  UploadObserver
 	Health   map[string]Pinger
 	Avatars  AvatarService
 	Web      *Web
@@ -54,7 +62,11 @@ func NewRouter(d Deps) http.Handler {
 
 	r.Get("/health", health(d.Logger, d.Health, healthTimeout))
 
-	h := &api{svc: d.Avatars, log: d.Logger}
+	uploads := d.Uploads
+	if uploads == nil {
+		uploads = nopObserver{}
+	}
+	h := &api{svc: d.Avatars, uploads: uploads, log: d.Logger}
 	uploadLimit := rateLimit(d.Security.UploadRateLimit, time.Minute)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(rateLimit(d.Security.RateLimitRPS, time.Second))
@@ -144,3 +156,4 @@ type nopObserver struct{}
 
 func (nopObserver) RequestStarted()                                                     {}
 func (nopObserver) RequestFinished(context.Context, string, string, int, time.Duration) {}
+func (nopObserver) ObserveUpload(context.Context, domain.Outcome, time.Duration)        {}
