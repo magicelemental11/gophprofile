@@ -17,7 +17,7 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
 
-func scrape(t *testing.T, m *Metrics, openMetrics bool) string {
+func scrape(t *testing.T, m *Registry, openMetrics bool) string {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	if openMetrics {

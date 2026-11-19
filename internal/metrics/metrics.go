@@ -23,8 +23,8 @@ var (
 	uploadBuckets = []float64{.05, .1, .25, .5, 1, 2.5, 5, 10, 30}
 )
 
-// Metrics holds the application metrics and the registry they are exposed from.
-type Metrics struct {
+// Registry holds the application metrics and the Prometheus registry they are exposed from.
+type Registry struct {
 	reg *prometheus.Registry
 
 	httpRequests *prometheus.CounterVec
@@ -42,11 +42,11 @@ type Metrics struct {
 }
 
 // New returns metrics registered in a fresh registry together with Go runtime and process metrics.
-func New() *Metrics {
+func New() *Registry {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	f := factory{reg}
-	m := &Metrics{
+	m := &Registry{
 		reg: reg,
 		httpRequests: f.counter("http_requests_total", "HTTP requests by method, route and status code.",
 			"method", "route", "code"),
@@ -69,7 +69,7 @@ func New() *Metrics {
 	return m
 }
 
-func (m *Metrics) initSeries() {
+func (m *Registry) initSeries() {
 	for _, o := range domain.Outcomes {
 		m.uploads.WithLabelValues(string(o))
 		m.deletes.WithLabelValues(string(o))
@@ -84,7 +84,7 @@ func (m *Metrics) initSeries() {
 }
 
 // Register adds collectors to the registry.
-func (m *Metrics) Register(cs ...prometheus.Collector) error {
+func (m *Registry) Register(cs ...prometheus.Collector) error {
 	for _, c := range cs {
 		if err := m.reg.Register(c); err != nil {
 			return fmt.Errorf("register collector: %w", err)
@@ -95,7 +95,7 @@ func (m *Metrics) Register(cs ...prometheus.Collector) error {
 
 // Handler serves the metrics in the Prometheus text or OpenMetrics format. A failing collector
 // is reported but does not hide the other metrics.
-func (m *Metrics) Handler() http.Handler {
+func (m *Registry) Handler() http.Handler {
 	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{
 		EnableOpenMetrics: true,
 		ErrorHandling:     promhttp.ContinueOnError,
@@ -103,41 +103,41 @@ func (m *Metrics) Handler() http.Handler {
 }
 
 // RequestStarted counts a request in flight until RequestFinished.
-func (m *Metrics) RequestStarted() {
+func (m *Registry) RequestStarted() {
 	m.httpInFlight.Inc()
 }
 
 // RequestFinished records a served request; route is the route template, not the raw path.
-func (m *Metrics) RequestFinished(ctx context.Context, method, route string, code int, d time.Duration) {
+func (m *Registry) RequestFinished(ctx context.Context, method, route string, code int, d time.Duration) {
 	m.httpInFlight.Dec()
 	m.httpRequests.WithLabelValues(method, route, strconv.Itoa(code)).Inc()
 	observe(ctx, m.httpDuration.WithLabelValues(method, route), d)
 }
 
 // ObserveUpload records an upload attempt and how long it took.
-func (m *Metrics) ObserveUpload(ctx context.Context, outcome domain.Outcome, d time.Duration) {
+func (m *Registry) ObserveUpload(ctx context.Context, outcome domain.Outcome, d time.Duration) {
 	m.uploads.WithLabelValues(string(outcome)).Inc()
 	observe(ctx, m.uploadDuration.WithLabelValues(string(outcome)), d)
 }
 
 // ObserveDelete records a deletion attempt.
-func (m *Metrics) ObserveDelete(outcome domain.Outcome) {
+func (m *Registry) ObserveDelete(outcome domain.Outcome) {
 	m.deletes.WithLabelValues(string(outcome)).Inc()
 }
 
 // ObserveMessage records a message handled by the worker.
-func (m *Metrics) ObserveMessage(ctx context.Context, operation string, outcome domain.Outcome, d time.Duration) {
+func (m *Registry) ObserveMessage(ctx context.Context, operation string, outcome domain.Outcome, d time.Duration) {
 	m.processed.WithLabelValues(operation, string(outcome)).Inc()
 	observe(ctx, m.processDuration.WithLabelValues(operation), d)
 }
 
 // Retried counts a failed attempt that is going to be repeated.
-func (m *Metrics) Retried(operation string) {
+func (m *Registry) Retried(operation string) {
 	m.retries.WithLabelValues(operation).Inc()
 }
 
 // DeadLettered counts a message sent to the dead-letter queue.
-func (m *Metrics) DeadLettered(operation string) {
+func (m *Registry) DeadLettered(operation string) {
 	m.deadLettered.WithLabelValues(operation).Inc()
 }
 
