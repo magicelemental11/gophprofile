@@ -115,8 +115,8 @@ Server и worker отдают `/metrics` (Prometheus и OpenMetrics с exemplars
 | `avatars_uploads_total` | counter | `status`: `success`, `rejected`, `error` | загрузки; `rejected` — ошибка клиента (формат, размер, user id, оборванный запрос), `error` — сбой сервиса |
 | `avatars_upload_duration_seconds` | histogram | `status` | время загрузки |
 | `avatars_deletes_total` | counter | `status` | удаления |
-| `avatars_storage_bytes` | gauge | `user_id` | объём оригиналов пользователя |
-| `avatars_storage_total_bytes` | gauge | | объём всех оригиналов |
+| `avatars_storage_bytes` | gauge | `user_id` | объём оригиналов у 10 пользователей с наибольшим объёмом |
+| `avatars_storage_total_bytes` | gauge | | объём всех оригиналов, по всем пользователям |
 | `avatars_total` | gauge | `processing_status` | аватары по статусу обработки |
 | `outbox_pending_events` | gauge | | события, ещё не отправленные в RabbitMQ |
 | `avatars_processing_total` | counter | `operation`: `process`, `delete`; `status`: `success`, `error`, `skipped` | сообщения, обработанные воркером; `skipped` — повтор уже обработанного |
@@ -126,7 +126,7 @@ Server и worker отдают `/metrics` (Prometheus и OpenMetrics с exemplars
 | `db_pool_connections` | gauge | `state`: `acquired`, `idle`, `total` | соединения пула pgx |
 | `db_pool_max_connections`, `db_pool_acquires_total`, `db_pool_empty_acquires_total`, `db_pool_empty_acquire_wait_seconds_total` | | | размер пула, выдачи соединений и ожидание свободного |
 
-Плюс стандартные `go_*` и `process_*`. Статистику хранилища, число аватаров и outbox отдаёт только server — запросом в PostgreSQL при каждом scrape. Счётчики по известным меткам начинаются с нуля, поэтому графики и алерты видят 0, а не пропуск. Prometheus также снимает RabbitMQ (`rabbitmq_detailed_queue_messages{queue}` и общие счётчики сообщений) и MinIO (`minio_s3_requests_total`, ёмкость дисков).
+Плюс стандартные `go_*` и `process_*`. Статистику хранилища, число аватаров и outbox отдаёт только server — запросом в PostgreSQL при каждом scrape. Метка `user_id` есть только у топ-10 по объёму: число временных рядов не растёт вместе с числом пользователей, а объём конкретного пользователя виден по запросу из размеров в `GET /api/v1/users/{user_id}/avatars`. Счётчики по известным меткам начинаются с нуля, поэтому графики и алерты видят 0, а не пропуск. Prometheus также снимает RabbitMQ (`rabbitmq_detailed_queue_messages{queue}` и общие счётчики сообщений) и MinIO (`minio_s3_requests_total`, ёмкость дисков).
 
 ### Дашборды
 

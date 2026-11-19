@@ -9,14 +9,15 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
 
-// StatsSource reads the avatar statistics reported at scrape time.
+// StatsSource reads the avatar statistics reported at scrape time, with storage usage of at most
+// topUsers users.
 type StatsSource interface {
-	Stats(ctx context.Context) (domain.Stats, error)
+	Stats(ctx context.Context, topUsers int) (domain.Stats, error)
 }
 
 var (
 	storageBytesDesc = prometheus.NewDesc("avatars_storage_bytes",
-		"Size of stored avatar originals per user.", []string{"user_id"}, nil)
+		"Size of stored avatar originals of the users storing the most.", []string{"user_id"}, nil)
 	storageTotalDesc = prometheus.NewDesc("avatars_storage_total_bytes",
 		"Size of all stored avatar originals.", nil, nil)
 	avatarsDesc = prometheus.NewDesc("avatars_total",
@@ -26,14 +27,16 @@ var (
 )
 
 type statsCollector struct {
-	src     StatsSource
-	timeout time.Duration
+	src      StatsSource
+	topUsers int
+	timeout  time.Duration
 }
 
 // NewStatsCollector reports storage usage, avatar counts and the outbox backlog, querying src
-// on every scrape with the given timeout.
-func NewStatsCollector(src StatsSource, timeout time.Duration) prometheus.Collector {
-	return statsCollector{src: src, timeout: timeout}
+// on every scrape with the given timeout. Per-user storage is reported only for the topUsers
+// users storing the most, so the number of series stays bounded.
+func NewStatsCollector(src StatsSource, topUsers int, timeout time.Duration) prometheus.Collector {
+	return statsCollector{src: src, topUsers: topUsers, timeout: timeout}
 }
 
 func (c statsCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -46,17 +49,15 @@ func (c statsCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c statsCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
-	s, err := c.src.Stats(ctx)
+	s, err := c.src.Stats(ctx, c.topUsers)
 	if err != nil {
 		ch <- prometheus.NewInvalidMetric(storageTotalDesc, err)
 		return
 	}
-	var total int64
-	for user, bytes := range s.StorageBytes {
-		total += bytes
+	for user, bytes := range s.TopStorage {
 		ch <- prometheus.MustNewConstMetric(storageBytesDesc, prometheus.GaugeValue, float64(bytes), user)
 	}
-	ch <- prometheus.MustNewConstMetric(storageTotalDesc, prometheus.GaugeValue, float64(total))
+	ch <- prometheus.MustNewConstMetric(storageTotalDesc, prometheus.GaugeValue, float64(s.StorageTotal))
 	for status, n := range s.Avatars {
 		ch <- prometheus.MustNewConstMetric(avatarsDesc, prometheus.GaugeValue, float64(n), string(status))
 	}

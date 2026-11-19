@@ -28,10 +28,16 @@ func TestStatsCountsUploadedAvatars(t *testing.T) {
 	require.NoError(t, r.MarkUploaded(ctx, deleted.ID, "e", testEvent()))
 	require.NoError(t, r.SoftDelete(ctx, deleted.ID, testEvent()))
 
-	s, err := r.Stats(ctx)
+	s, err := r.Stats(ctx, 10)
 
 	require.NoError(t, err)
-	assert.Equal(t, map[string]int64{"a@x": 84, "b@x": 42}, s.StorageBytes)
+	assert.Equal(t, map[string]int64{"a@x": 84, "b@x": 42}, s.TopStorage)
+	assert.Equal(t, int64(126), s.StorageTotal)
+
+	top, err := r.Stats(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int64{"a@x": 84}, top.TopStorage)
+	assert.Equal(t, int64(126), top.StorageTotal, "total is not limited to the top users")
 	assert.Equal(t, map[domain.ProcessingStatus]int64{domain.ProcessingPending: 3}, s.Avatars)
 	assert.Equal(t, int64(5), s.OutboxPending)
 	assert.Positive(t, r.PoolStat().TotalConns())

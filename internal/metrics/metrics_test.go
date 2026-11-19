@@ -114,24 +114,33 @@ func TestExemplarsCarryTraceID(t *testing.T) {
 }
 
 type fakeStats struct {
-	stats domain.Stats
-	err   error
+	stats    domain.Stats
+	err      error
+	topUsers *int
 }
 
-func (f fakeStats) Stats(context.Context) (domain.Stats, error) { return f.stats, f.err }
+func (f fakeStats) Stats(_ context.Context, topUsers int) (domain.Stats, error) {
+	if f.topUsers != nil {
+		*f.topUsers = topUsers
+	}
+	return f.stats, f.err
+}
 
 func TestStatsCollector(t *testing.T) {
 	m := New()
+	var topUsers int
 	require.NoError(t, m.Register(NewStatsCollector(fakeStats{stats: domain.Stats{
-		StorageBytes:  map[string]int64{"a@x": 100, "b@x": 50},
+		TopStorage:    map[string]int64{"a@x": 100, "b@x": 50},
+		StorageTotal:  170,
 		Avatars:       map[domain.ProcessingStatus]int64{domain.ProcessingCompleted: 2, domain.ProcessingFailed: 1},
 		OutboxPending: 3,
-	}}, time.Second)))
+	}, topUsers: &topUsers}, 10, time.Second)))
 
 	out := scrape(t, m, false)
+	assert.Equal(t, 10, topUsers)
 	assert.Contains(t, out, `avatars_storage_bytes{user_id="a@x"} 100`)
 	assert.Contains(t, out, `avatars_storage_bytes{user_id="b@x"} 50`)
-	assert.Contains(t, out, `avatars_storage_total_bytes 150`)
+	assert.Contains(t, out, `avatars_storage_total_bytes 170`, "total covers users outside the top")
 	assert.Contains(t, out, `avatars_total{processing_status="completed"} 2`)
 	assert.Contains(t, out, `avatars_total{processing_status="failed"} 1`)
 	assert.Contains(t, out, `outbox_pending_events 3`)
@@ -139,7 +148,7 @@ func TestStatsCollector(t *testing.T) {
 
 func TestStatsCollectorErrorKeepsScrape(t *testing.T) {
 	m := New()
-	require.NoError(t, m.Register(NewStatsCollector(fakeStats{err: errors.New("db down")}, time.Second)))
+	require.NoError(t, m.Register(NewStatsCollector(fakeStats{err: errors.New("db down")}, 10, time.Second)))
 	m.ObserveDelete(domain.OutcomeSuccess)
 
 	out := scrape(t, m, false)
@@ -182,7 +191,7 @@ func TestMetricNamesFollowConventions(t *testing.T) {
 	m.RequestStarted()
 	m.RequestFinished(context.Background(), http.MethodGet, "/health", http.StatusOK, time.Millisecond)
 	require.NoError(t, m.Register(NewPoolCollector(func() PoolStat { return fakePool{} })))
-	require.NoError(t, m.Register(NewStatsCollector(fakeStats{}, time.Second)))
+	require.NoError(t, m.Register(NewStatsCollector(fakeStats{}, 10, time.Second)))
 
 	problems, err := testutil.GatherAndLint(m.reg)
 	require.NoError(t, err)

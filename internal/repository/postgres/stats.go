@@ -9,37 +9,38 @@ import (
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
 
-// Stats reports the storage used by uploaded, non-deleted avatars per user, their count per
-// processing status and the number of unpublished outbox events.
-func (r *Repository) Stats(ctx context.Context) (domain.Stats, error) {
-	s := domain.Stats{StorageBytes: map[string]int64{}, Avatars: map[domain.ProcessingStatus]int64{}}
-	err := r.collect(ctx, `
+// Stats reports the storage used by uploaded, non-deleted avatars in total and for the topUsers
+// users storing the most, their count per processing status and the number of unpublished
+// outbox events.
+func (r *Repository) Stats(ctx context.Context, topUsers int) (domain.Stats, error) {
+	s := domain.Stats{TopStorage: map[string]int64{}, Avatars: map[domain.ProcessingStatus]int64{}}
+	err := r.collect(ctx, func(scan func(...any) error) error {
+		var user string
+		var bytes int64
+		if err := scan(&user, &bytes); err != nil {
+			return err
+		}
+		s.TopStorage[user] = bytes
+		return nil
+	}, `
 		SELECT user_id, sum(size_bytes)::bigint FROM avatars
-		WHERE deleted_at IS NULL AND upload_status = 'uploaded' GROUP BY user_id`,
-		func(scan func(...any) error) error {
-			var user string
-			var bytes int64
-			if err := scan(&user, &bytes); err != nil {
-				return err
-			}
-			s.StorageBytes[user] = bytes
-			return nil
-		})
+		WHERE deleted_at IS NULL AND upload_status = 'uploaded' GROUP BY user_id
+		ORDER BY 2 DESC, user_id LIMIT $1`, topUsers)
 	if err != nil {
 		return domain.Stats{}, fmt.Errorf("storage usage: %w", err)
 	}
-	err = r.collect(ctx, `
-		SELECT processing_status, count(*) FROM avatars
-		WHERE deleted_at IS NULL AND upload_status = 'uploaded' GROUP BY processing_status`,
-		func(scan func(...any) error) error {
-			var status domain.ProcessingStatus
-			var n int64
-			if err := scan(&status, &n); err != nil {
-				return err
-			}
-			s.Avatars[status] = n
-			return nil
-		})
+	err = r.collect(ctx, func(scan func(...any) error) error {
+		var status domain.ProcessingStatus
+		var n, bytes int64
+		if err := scan(&status, &n, &bytes); err != nil {
+			return err
+		}
+		s.Avatars[status] = n
+		s.StorageTotal += bytes
+		return nil
+	}, `
+		SELECT processing_status, count(*), sum(size_bytes)::bigint FROM avatars
+		WHERE deleted_at IS NULL AND upload_status = 'uploaded' GROUP BY processing_status`)
 	if err != nil {
 		return domain.Stats{}, fmt.Errorf("count avatars: %w", err)
 	}
@@ -49,8 +50,8 @@ func (r *Repository) Stats(ctx context.Context) (domain.Stats, error) {
 	return s, nil
 }
 
-func (r *Repository) collect(ctx context.Context, sql string, row func(scan func(...any) error) error) error {
-	rows, err := r.db.Query(ctx, sql)
+func (r *Repository) collect(ctx context.Context, row func(scan func(...any) error) error, sql string, args ...any) error {
+	rows, err := r.db.Query(ctx, sql, args...)
 	if err != nil {
 		return err
 	}

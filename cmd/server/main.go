@@ -29,6 +29,7 @@ const (
 	shutdownTimeout = 10 * time.Second
 	flushTimeout    = 5 * time.Second
 	statsTimeout    = 2 * time.Second
+	storageTopUsers = 10
 	relayInterval   = time.Second
 )
 
@@ -90,7 +91,7 @@ func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
 	m := metrics.New()
 	err = m.Register(
 		metrics.NewPoolCollector(func() metrics.PoolStat { return repo.PoolStat() }),
-		metrics.NewStatsCollector(repo, statsTimeout),
+		metrics.NewStatsCollector(repo, storageTopUsers, statsTimeout),
 	)
 	if err != nil {
 		return err
