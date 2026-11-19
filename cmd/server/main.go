@@ -53,7 +53,7 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
-	flushTraces, err := telemetry.Setup(ctx, telemetry.Config{ServiceName: serviceName, Version: version, Endpoint: cfg.OTLPEndpoint})
+	flushTraces, err := telemetry.Setup(ctx, telemetry.Config{ServiceName: serviceName, Version: version, Endpoint: cfg.OTLPEndpoint, SampleRatio: cfg.TraceSampleRatio})
 	if err != nil {
 		return err
 	}

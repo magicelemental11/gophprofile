@@ -18,6 +18,7 @@ x-app: &app
     RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
     UPLOAD_RATE_LIMIT: ${UPLOAD_RATE_LIMIT:-10}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    TRACE_SAMPLE_RATIO: ${TRACE_SAMPLE_RATIO:-1}
     METRICS_ADDRESS: ":9091"
   # Logs go to Fluent Bit and on to OpenSearch; Docker keeps a local copy for `docker compose logs`.
   # The async driver buffers and reconnects, so the app does not wait for the logging stack.

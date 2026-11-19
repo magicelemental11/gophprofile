@@ -23,6 +23,9 @@ type Config struct {
 	Version     string
 	// Endpoint is an OTLP/gRPC URL such as http://jaeger:4317; empty disables export.
 	Endpoint string
+	// SampleRatio is the share of new traces that are recorded, from 0 to 1. A trace started
+	// upstream keeps the sampling decision of its parent.
+	SampleRatio float64
 }
 
 // Setup installs the global W3C trace context propagator and, when an endpoint is set, a global
@@ -30,7 +33,10 @@ type Config struct {
 // but incoming trace context is still passed on. The returned function flushes pending spans.
 func Setup(ctx context.Context, cfg Config) (func(context.Context) error, error) {
 	if cfg.Endpoint == "" {
-		return setup(cfg.ServiceName, cfg.Version, nil), nil
+		return setup(cfg, nil), nil
+	}
+	if !(cfg.SampleRatio >= 0 && cfg.SampleRatio <= 1) {
+		return nil, fmt.Errorf("trace sample ratio %g must be between 0 and 1", cfg.SampleRatio)
 	}
 	u, err := url.Parse(cfg.Endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -40,27 +46,27 @@ func Setup(ctx context.Context, cfg Config) (func(context.Context) error, error)
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP exporter: %w", err)
 	}
-	return setup(cfg.ServiceName, cfg.Version, exp), nil
+	return setup(cfg, exp), nil
 }
 
-func setup(serviceName, version string, exp sdktrace.SpanExporter) func(context.Context) error {
+func setup(cfg Config, exp sdktrace.SpanExporter) func(context.Context) error {
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 	if exp == nil {
 		return func(context.Context) error { return nil }
 	}
-	tp := newProvider(serviceName, version, sdktrace.NewBatchSpanProcessor(exp))
+	tp := newProvider(cfg, sdktrace.NewBatchSpanProcessor(exp))
 	otel.SetTracerProvider(tp)
 	return tp.Shutdown
 }
 
-func newProvider(serviceName, version string, sp sdktrace.SpanProcessor) *sdktrace.TracerProvider {
+func newProvider(cfg Config, sp sdktrace.SpanProcessor) *sdktrace.TracerProvider {
 	res, _ := resource.Merge(resource.Default(), resource.NewSchemaless(
-		semconv.ServiceName(serviceName),
-		semconv.ServiceVersion(version),
+		semconv.ServiceName(cfg.ServiceName),
+		semconv.ServiceVersion(cfg.Version),
 	))
 	return sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SampleRatio))),
 		sdktrace.WithSpanProcessor(sp),
 	)
 }

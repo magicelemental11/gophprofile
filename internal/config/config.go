@@ -26,6 +26,8 @@ type Common struct {
 	S3          S3
 	// OTLPEndpoint is the OTLP/gRPC URL traces are exported to; empty disables tracing.
 	OTLPEndpoint string
+	// TraceSampleRatio is the share of new traces that are recorded, from 0 to 1.
+	TraceSampleRatio float64
 	// MetricsAddress is where Prometheus metrics are served at /metrics.
 	MetricsAddress string
 }
@@ -58,6 +60,7 @@ var commonBindings = []binding{
 	{"amqp", "AMQP_URL"},
 	{"log-level", "LOG_LEVEL"},
 	{"otlp-endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT"},
+	{"trace-sample-ratio", "TRACE_SAMPLE_RATIO"},
 	{"metrics-address", "METRICS_ADDRESS"},
 	{"s3-endpoint", "S3_ENDPOINT"},
 	{"s3-access-key", "S3_ACCESS_KEY"},
@@ -143,6 +146,7 @@ func registerCommon(fs *flag.FlagSet, c *Common, metricsAddress string) {
 	fs.StringVar(&c.AMQPURL, "amqp", "", "RabbitMQ URL, required (env AMQP_URL)")
 	fs.StringVar(&c.LogLevel, "log-level", "info", "log level (env LOG_LEVEL)")
 	fs.StringVar(&c.OTLPEndpoint, "otlp-endpoint", "", "OTLP/gRPC URL for traces, e.g. http://jaeger:4317; empty disables tracing (env OTEL_EXPORTER_OTLP_ENDPOINT)")
+	fs.Float64Var(&c.TraceSampleRatio, "trace-sample-ratio", 1, "share of new traces recorded, from 0 to 1 (env TRACE_SAMPLE_RATIO)")
 	fs.StringVar(&c.MetricsAddress, "metrics-address", metricsAddress, "listen address of the Prometheus /metrics endpoint (env METRICS_ADDRESS)")
 	fs.StringVar(&c.S3.Endpoint, "s3-endpoint", "", "S3 endpoint host:port, required (env S3_ENDPOINT)")
 	fs.StringVar(&c.S3.AccessKey, "s3-access-key", "", "S3 access key, required (env S3_ACCESS_KEY)")
@@ -183,6 +187,8 @@ func (c Common) validate() error {
 		return errors.New("S3 endpoint and credentials are required (-s3-endpoint, -s3-access-key, -s3-secret-key)")
 	case c.AMQPURL == "":
 		return errors.New("RabbitMQ URL is required (-amqp or AMQP_URL)")
+	case !(c.TraceSampleRatio >= 0 && c.TraceSampleRatio <= 1):
+		return errors.New("trace sample ratio must be between 0 and 1")
 	}
 	return nil
 }

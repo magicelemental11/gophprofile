@@ -39,6 +39,7 @@ func TestLoadServerDefaults(t *testing.T) {
 	assert.Empty(t, cfg.CORSAllowedOrigins)
 	assert.Equal(t, 100, cfg.RateLimitRPS)
 	assert.Equal(t, 10, cfg.UploadRateLimit)
+	assert.InDelta(t, 1.0, cfg.TraceSampleRatio, 0)
 }
 
 func TestLoadServerSecurity(t *testing.T) {
@@ -90,6 +91,9 @@ func TestLoadServerErrors(t *testing.T) {
 		"unknown flag": {args: []string{"-nope"}},
 		"negative rps": {args: append([]string{"-rate-limit-rps", "-1"}, requiredArgs...)},
 		"neg uploads":  {args: append([]string{"-upload-rate-limit", "-1"}, requiredArgs...)},
+		"ratio above":  {args: append([]string{"-trace-sample-ratio", "1.5"}, requiredArgs...)},
+		"ratio env":    {args: requiredArgs, env: map[string]string{"TRACE_SAMPLE_RATIO": "-0.1"}},
+		"ratio nan":    {args: append([]string{"-trace-sample-ratio", "NaN"}, requiredArgs...)},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -116,6 +120,13 @@ func TestLoadWorkerErrors(t *testing.T) {
 	assert.Error(t, err)
 	_, err = LoadWorker(nil)
 	assert.Error(t, err)
+}
+
+func TestLoadTraceSampleRatio(t *testing.T) {
+	t.Setenv("TRACE_SAMPLE_RATIO", "0.1")
+	w, err := LoadWorker(requiredArgs)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.1, w.TraceSampleRatio, 0)
 }
 
 func TestLoadOTLPEndpoint(t *testing.T) {
