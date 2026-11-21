@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
@@ -41,4 +42,10 @@ type OutboxRepository interface {
 // EventPublisher sends events to the message broker.
 type EventPublisher interface {
 	Publish(ctx context.Context, ev domain.Event) error
+}
+
+// Metrics records business events for monitoring.
+type Metrics interface {
+	ObserveUpload(ctx context.Context, outcome domain.Outcome, d time.Duration)
+	ObserveDelete(outcome domain.Outcome)
 }

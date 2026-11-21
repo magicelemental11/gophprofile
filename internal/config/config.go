@@ -24,6 +24,12 @@ type Common struct {
 	AMQPURL     string
 	LogLevel    string
 	S3          S3
+	// OTLPEndpoint is the OTLP/gRPC URL traces are exported to; empty disables tracing.
+	OTLPEndpoint string
+	// TraceSampleRatio is the share of new traces that are recorded, from 0 to 1.
+	TraceSampleRatio float64
+	// MetricsAddress is where Prometheus metrics are served at /metrics.
+	MetricsAddress string
 }
 
 // Server holds the HTTP server settings.
@@ -53,6 +59,9 @@ var commonBindings = []binding{
 	{"d", "DATABASE_DSN"},
 	{"amqp", "AMQP_URL"},
 	{"log-level", "LOG_LEVEL"},
+	{"otlp-endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT"},
+	{"trace-sample-ratio", "TRACE_SAMPLE_RATIO"},
+	{"metrics-address", "METRICS_ADDRESS"},
 	{"s3-endpoint", "S3_ENDPOINT"},
 	{"s3-access-key", "S3_ACCESS_KEY"},
 	{"s3-secret-key", "S3_SECRET_KEY"},
@@ -78,7 +87,7 @@ var workerBindings = []binding{
 func LoadServer(args []string) (Server, error) {
 	var cfg Server
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
-	registerCommon(fs, &cfg.Common)
+	registerCommon(fs, &cfg.Common, ":9091")
 	fs.StringVar(&cfg.Address, "a", ":8080", "listen address (env ADDRESS)")
 	fs.Int64Var(&cfg.MaxUploadSize, "max-upload-size", 10<<20, "maximum upload size in bytes (env MAX_UPLOAD_SIZE)")
 	fs.StringVar(&cfg.WebDir, "web-dir", "./web", "web interface directory (env WEB_DIR)")
@@ -107,7 +116,7 @@ func LoadServer(args []string) (Server, error) {
 func LoadWorker(args []string) (Worker, error) {
 	var cfg Worker
 	fs := flag.NewFlagSet("worker", flag.ContinueOnError)
-	registerCommon(fs, &cfg.Common)
+	registerCommon(fs, &cfg.Common, ":9092")
 	fs.IntVar(&cfg.Prefetch, "prefetch", 10, "messages taken from the broker at once (env WORKER_PREFETCH)")
 	fs.IntVar(&cfg.MaxRetries, "max-retries", 5, "processing attempts per message (env WORKER_MAX_RETRIES)")
 	if err := parse(fs, args, append(workerBindings, commonBindings...)); err != nil {
@@ -132,10 +141,13 @@ func splitList(v string) []string {
 	return out
 }
 
-func registerCommon(fs *flag.FlagSet, c *Common) {
+func registerCommon(fs *flag.FlagSet, c *Common, metricsAddress string) {
 	fs.StringVar(&c.DatabaseDSN, "d", "", "PostgreSQL DSN, required (env DATABASE_DSN)")
 	fs.StringVar(&c.AMQPURL, "amqp", "", "RabbitMQ URL, required (env AMQP_URL)")
 	fs.StringVar(&c.LogLevel, "log-level", "info", "log level (env LOG_LEVEL)")
+	fs.StringVar(&c.OTLPEndpoint, "otlp-endpoint", "", "OTLP/gRPC URL for traces, e.g. http://jaeger:4317; empty disables tracing (env OTEL_EXPORTER_OTLP_ENDPOINT)")
+	fs.Float64Var(&c.TraceSampleRatio, "trace-sample-ratio", 1, "share of new traces recorded, from 0 to 1 (env TRACE_SAMPLE_RATIO)")
+	fs.StringVar(&c.MetricsAddress, "metrics-address", metricsAddress, "listen address of the Prometheus /metrics endpoint (env METRICS_ADDRESS)")
 	fs.StringVar(&c.S3.Endpoint, "s3-endpoint", "", "S3 endpoint host:port, required (env S3_ENDPOINT)")
 	fs.StringVar(&c.S3.AccessKey, "s3-access-key", "", "S3 access key, required (env S3_ACCESS_KEY)")
 	fs.StringVar(&c.S3.SecretKey, "s3-secret-key", "", "S3 secret key, required (env S3_SECRET_KEY)")
@@ -175,6 +187,8 @@ func (c Common) validate() error {
 		return errors.New("S3 endpoint and credentials are required (-s3-endpoint, -s3-access-key, -s3-secret-key)")
 	case c.AMQPURL == "":
 		return errors.New("RabbitMQ URL is required (-amqp or AMQP_URL)")
+	case !(c.TraceSampleRatio >= 0 && c.TraceSampleRatio <= 1):
+		return errors.New("trace sample ratio must be between 0 and 1")
 	}
 	return nil
 }

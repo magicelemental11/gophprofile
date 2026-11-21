@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
-	"go.uber.org/zap"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/service"
@@ -33,31 +35,66 @@ type Processor interface {
 	MarkFailed(ctx context.Context, avatarID string) error
 }
 
+// Metrics records message handling for monitoring.
+type Metrics interface {
+	ObserveMessage(ctx context.Context, operation string, outcome domain.Outcome, d time.Duration)
+	Retried(operation string)
+	DeadLettered(operation string)
+}
+
+// Operation names reported to Metrics.
+const (
+	operationProcess = domain.OperationProcess
+	operationDelete  = domain.OperationDelete
+	operationUnknown = "unknown"
+)
+
 // Worker dispatches messages to the processor.
 type Worker struct {
 	proc       Processor
-	log        *zap.Logger
+	metrics    Metrics
+	log        *slog.Logger
 	maxRetries int
 	sleep      func(ctx context.Context, d time.Duration) error
 }
 
 // New returns a worker that tries each message up to maxRetries times.
-func New(proc Processor, log *zap.Logger, maxRetries int) *Worker {
-	return &Worker{proc: proc, log: log, maxRetries: maxRetries, sleep: sleepContext}
+func New(proc Processor, metrics Metrics, log *slog.Logger, maxRetries int) *Worker {
+	return &Worker{proc: proc, metrics: metrics, log: log, maxRetries: maxRetries, sleep: sleepContext}
 }
 
 // Handle processes one message. A returned error means the message is given up on
 // and should go to the dead-letter queue.
 func (w *Worker) Handle(ctx context.Context, m Message) error {
-	log := w.log.With(zap.String("message_id", m.ID), zap.String("routing_key", m.RoutingKey))
-	err := w.handle(ctx, m, log)
+	start := time.Now()
+	op := operationOf(m.RoutingKey)
+	log := w.log.With(slog.String("message_id", m.ID), slog.String("routing_key", m.RoutingKey))
+	err := w.handle(ctx, m, op, log)
+	outcome := domain.OutcomeOf(err)
+	if errors.Is(err, service.ErrDuplicate) {
+		outcome, err = domain.OutcomeSkipped, nil
+		log.InfoContext(ctx, "message already handled")
+	}
+	w.metrics.ObserveMessage(ctx, op, outcome, time.Since(start))
 	if err != nil {
-		log.Error("message failed", zap.Error(err))
+		w.metrics.DeadLettered(op)
+		log.ErrorContext(ctx, "message failed", slog.Any("error", err))
 	}
 	return err
 }
 
-func (w *Worker) handle(ctx context.Context, m Message, log *zap.Logger) error {
+func operationOf(routingKey string) string {
+	switch routingKey {
+	case domain.RoutingUploaded, domain.RoutingProcess:
+		return operationProcess
+	case domain.RoutingDeleted:
+		return operationDelete
+	default:
+		return operationUnknown
+	}
+}
+
+func (w *Worker) handle(ctx context.Context, m Message, op string, log *slog.Logger) error {
 	var ev domain.AvatarProcessEvent
 	switch m.RoutingKey {
 	case domain.RoutingUploaded:
@@ -71,31 +108,34 @@ func (w *Worker) handle(ctx context.Context, m Message, log *zap.Logger) error {
 			return err
 		}
 	case domain.RoutingDeleted:
-		return w.deleteFiles(ctx, m, log)
+		return w.deleteFiles(ctx, m, op, log)
 	default:
 		return fmt.Errorf("%w: unknown routing key %q", service.ErrPermanent, m.RoutingKey)
 	}
 
-	err := w.retry(ctx, log, func() error { return w.proc.Process(ctx, m.ID, ev) })
+	err := w.retry(ctx, op, log, func() error { return w.proc.Process(ctx, m.ID, ev) })
+	if errors.Is(err, service.ErrDuplicate) {
+		return err
+	}
 	if err != nil {
 		if errFail := w.proc.MarkFailed(context.WithoutCancel(ctx), ev.AvatarID); errFail != nil {
-			log.Error("mark avatar failed", zap.String("avatar_id", ev.AvatarID), zap.Error(errFail))
+			log.ErrorContext(ctx, "mark avatar failed", slog.String("avatar_id", ev.AvatarID), slog.Any("error", errFail))
 		}
 		return err
 	}
-	log.Info("avatar processed", zap.String("avatar_id", ev.AvatarID))
+	log.InfoContext(ctx, "avatar processed", slog.String("avatar_id", ev.AvatarID))
 	return nil
 }
 
-func (w *Worker) deleteFiles(ctx context.Context, m Message, log *zap.Logger) error {
+func (w *Worker) deleteFiles(ctx context.Context, m Message, op string, log *slog.Logger) error {
 	var ev domain.AvatarDeleteEvent
 	if err := decode(m.Body, &ev); err != nil {
 		return err
 	}
-	if err := w.retry(ctx, log, func() error { return w.proc.DeleteFiles(ctx, m.ID, ev) }); err != nil {
+	if err := w.retry(ctx, op, log, func() error { return w.proc.DeleteFiles(ctx, m.ID, ev) }); err != nil {
 		return err
 	}
-	log.Info("avatar files deleted", zap.String("avatar_id", ev.AvatarID), zap.Int("keys", len(ev.S3Keys)))
+	log.InfoContext(ctx, "avatar files deleted", slog.String("avatar_id", ev.AvatarID), slog.Int("keys", len(ev.S3Keys)))
 	return nil
 }
 
@@ -106,17 +146,23 @@ func decode(body []byte, v any) error {
 	return nil
 }
 
-func (w *Worker) retry(ctx context.Context, log *zap.Logger, fn func() error) error {
+func (w *Worker) retry(ctx context.Context, op string, log *slog.Logger, fn func() error) error {
 	var err error
 	for attempt := range w.maxRetries {
-		if err = fn(); err == nil || errors.Is(err, service.ErrPermanent) {
+		if err = fn(); err == nil || errors.Is(err, service.ErrPermanent) || errors.Is(err, service.ErrDuplicate) {
 			return err
 		}
 		if attempt == w.maxRetries-1 {
 			break
 		}
 		delay := backoff(attempt)
-		log.Warn("attempt failed, retrying", zap.Int("attempt", attempt+1), zap.Duration("delay", delay), zap.Error(err))
+		w.metrics.Retried(op)
+		log.WarnContext(ctx, "attempt failed, retrying", slog.Int("attempt", attempt+1), slog.Duration("delay", delay), slog.Any("error", err))
+		trace.SpanFromContext(ctx).AddEvent("retry", trace.WithAttributes(
+			attribute.Int("attempt", attempt+1),
+			attribute.String("delay", delay.String()),
+			attribute.String("error", err.Error()),
+		))
 		if errSleep := w.sleep(ctx, delay); errSleep != nil {
 			return errors.Join(err, errSleep)
 		}

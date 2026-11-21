@@ -8,8 +8,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
+	"github.com/magicelemental11/gophprofile/internal/telemetry/telemetrytest"
 )
 
 const (
@@ -181,7 +183,7 @@ func TestUpdatesWithEvent(t *testing.T) {
 				assert.Regexp(t, c.sql+`.* WHERE id = \$1 AND deleted_at IS NULL`, db.calls[0].sql)
 				assert.Equal(t, avatarID, db.calls[0].args[0])
 				db.lastSQL(t, `INSERT INTO outbox`)
-				assert.Equal(t, []any{ev.ID, ev.RoutingKey, ev.Payload}, db.calls[1].args)
+				assert.Equal(t, []any{ev.ID, ev.RoutingKey, ev.Payload, map[string]string{}}, db.calls[1].args)
 				assert.True(t, db.committed)
 			})
 
@@ -323,4 +325,40 @@ func TestProcessedMessagesQueries(t *testing.T) {
 
 	db.expect(result{err: errDB})
 	assert.ErrorIs(t, r.MarkProcessed(ctx, messageID), errDB)
+}
+
+func TestTransactionSpans(t *testing.T) {
+	rec := telemetrytest.Record(t)
+	r, db := newFakeRepo(t)
+	for range 3 {
+		db.expect(result{affected: 0})
+	}
+	ctx := context.Background()
+	id := avatarID
+	ev := domain.Event{ID: messageID, RoutingKey: domain.RoutingDeleted}
+
+	_ = r.MarkUploaded(ctx, id, `"e"`, ev)
+	_ = r.SoftDelete(ctx, id, ev)
+	_, _ = r.CompleteProcessing(ctx, id, nil, messageID)
+
+	for _, name := range []string{"postgres.mark_uploaded", "postgres.soft_delete", "postgres.complete_processing"} {
+		s := telemetrytest.Ended(t, rec, name)
+		assert.Equal(t, "postgresql", telemetrytest.Attrs(s)["db.system.name"].AsString(), name)
+		assert.Equal(t, id, telemetrytest.Attrs(s)["avatar_id"].AsString(), name)
+	}
+}
+
+func TestEventKeepsTraceContext(t *testing.T) {
+	telemetrytest.Record(t)
+	r, db := newFakeRepo(t)
+	db.expect(result{affected: 1})
+	db.expect(result{affected: 1})
+	ctx, span := otel.Tracer("test").Start(context.Background(), "upload_avatar")
+	defer span.End()
+
+	require.NoError(t, r.MarkUploaded(ctx, avatarID, `"e"`, domain.Event{ID: messageID, RoutingKey: domain.RoutingUploaded}))
+
+	carrier, ok := db.calls[1].args[3].(map[string]string)
+	require.True(t, ok)
+	assert.Contains(t, carrier["traceparent"], span.SpanContext().TraceID().String())
 }

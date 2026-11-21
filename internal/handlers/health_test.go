@@ -3,12 +3,12 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 )
 
 type pingFunc func(ctx context.Context) error
@@ -18,7 +18,7 @@ func (f pingFunc) Ping(ctx context.Context) error { return f(ctx) }
 func ok() Pinger { return pingFunc(func(context.Context) error { return nil }) }
 
 func TestHealthAllOK(t *testing.T) {
-	h := NewRouter(Deps{Logger: zap.NewNop(), Health: map[string]Pinger{"database": ok(), "storage": ok(), "broker": ok()}})
+	h := NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Health: map[string]Pinger{"database": ok(), "storage": ok(), "broker": ok()}})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -27,7 +27,7 @@ func TestHealthAllOK(t *testing.T) {
 
 func TestHealthDegraded(t *testing.T) {
 	failing := pingFunc(func(context.Context) error { return errors.New("connection refused") })
-	h := NewRouter(Deps{Logger: zap.NewNop(), Health: map[string]Pinger{"database": ok(), "storage": failing}})
+	h := NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Health: map[string]Pinger{"database": ok(), "storage": failing}})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
@@ -39,7 +39,7 @@ func TestHealthTimeout(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	})
-	h := health(zap.NewNop(), map[string]Pinger{"broker": slow}, 1)
+	h := health(slog.New(slog.DiscardHandler), map[string]Pinger{"broker": slow}, 1)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)

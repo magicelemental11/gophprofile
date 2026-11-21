@@ -7,6 +7,12 @@ const (
 	RoutingDeleted  = "avatar.deleted"
 )
 
+// Worker operations as reported to monitoring.
+const (
+	OperationProcess = "process"
+	OperationDelete  = "delete"
+)
+
 // AvatarUploadEvent is published after the original reaches object storage.
 type AvatarUploadEvent struct {
 	AvatarID string `json:"avatar_id"`

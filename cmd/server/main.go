@@ -6,48 +6,66 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
 	"github.com/magicelemental11/gophprofile/internal/config"
 	"github.com/magicelemental11/gophprofile/internal/handlers"
 	"github.com/magicelemental11/gophprofile/internal/logger"
+	"github.com/magicelemental11/gophprofile/internal/metrics"
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
 	"github.com/magicelemental11/gophprofile/internal/service"
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
+	"github.com/magicelemental11/gophprofile/internal/telemetry"
 )
 
 const (
+	serviceName     = "gophprofile-server"
 	shutdownTimeout = 10 * time.Second
+	flushTimeout    = 5 * time.Second
+	statsTimeout    = 2 * time.Second
+	storageTopUsers = 10
 	relayInterval   = time.Second
 )
+
+var version = "dev"
 
 func main() {
 	cfg, err := config.LoadServer(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
 	}
-	lg, err := logger.New(cfg.LogLevel)
+	lg, err := logger.New(os.Stdout, cfg.LogLevel, serviceName)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func() { _ = lg.Sync() }()
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	if err := run(ctx, cfg, lg); err != nil {
-		lg.Fatal("server stopped", zap.Error(err))
+	err = run(ctx, cfg, lg)
+	stop()
+	if err != nil {
+		lg.Error("server stopped", slog.Any("error", err))
+		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
+func run(ctx context.Context, cfg config.Server, lg *slog.Logger) error {
+	flushTraces, err := telemetry.Setup(ctx, telemetry.Config{ServiceName: serviceName, Version: version, Endpoint: cfg.OTLPEndpoint, SampleRatio: cfg.TraceSampleRatio})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushTimeout)
+		defer cancel()
+		if err := flushTraces(flushCtx); err != nil {
+			lg.WarnContext(flushCtx, "flush traces", slog.Any("error", err))
+		}
+	}()
+
 	web, err := handlers.NewWeb(os.DirFS(cfg.WebDir))
 	if err != nil {
 		return err
@@ -70,6 +88,19 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 	}
 	defer func() { _ = broker.Close() }()
 
+	m := metrics.New()
+	err = m.Register(
+		metrics.NewPoolCollector(func() metrics.PoolStat { return repo.PoolStat() }),
+		metrics.NewStatsCollector(repo, storageTopUsers, statsTimeout),
+	)
+	if err != nil {
+		return err
+	}
+	metricsCtx, stopMetrics := context.WithCancel(ctx)
+	defer stopMetrics()
+	metricsErr := make(chan error, 1)
+	go func() { metricsErr <- metrics.Serve(metricsCtx, cfg.MetricsAddress, m.Handler()) }()
+
 	relayCtx, stopRelay := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
 	go func() {
@@ -83,8 +114,10 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 
 	router := handlers.NewRouter(handlers.Deps{
 		Logger:  lg,
+		Metrics: m,
+		Uploads: m,
 		Health:  map[string]handlers.Pinger{"database": repo, "storage": store, "broker": broker},
-		Avatars: service.NewAvatarService(repo, store, lg, cfg.MaxUploadSize),
+		Avatars: service.NewAvatarService(repo, store, m, lg, cfg.MaxUploadSize),
 		Web:     web,
 		Security: handlers.Security{
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
@@ -100,12 +133,14 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 	closed := broker.NotifyClose()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	lg.Info("server started", zap.String("address", cfg.Address))
+	lg.InfoContext(ctx, "server started", slog.String("address", cfg.Address), slog.String("metrics_address", cfg.MetricsAddress))
 
 	var runErr error
 	select {
 	case err := <-errCh:
 		return err
+	case err := <-metricsErr:
+		runErr = err
 	case amqpErr, ok := <-closed:
 		runErr = errors.New("broker connection closed")
 		if ok {
@@ -113,7 +148,7 @@ func run(ctx context.Context, cfg config.Server, lg *zap.Logger) error {
 		}
 	case <-ctx.Done():
 	}
-	lg.Info("shutting down")
+	lg.InfoContext(ctx, "shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

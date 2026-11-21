@@ -1,0 +1,14 @@
+{
+  "config_id": "gophprofile-alert-receiver",
+  "config": {
+    "name": "GophProfile alert receiver",
+    "description": "Webhook to the alert-receiver container, the same one Alertmanager notifies.",
+    "config_type": "webhook",
+    "is_enabled": true,
+    "webhook": {
+      "url": "http://alert-receiver:8080/opensearch",
+      "method": "POST",
+      "header_params": {"Content-Type": "application/json"}
+    }
+  }
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/service"
@@ -31,6 +31,7 @@ type fakeService struct {
 	uploaded   []byte
 	uploadUser string
 	uploadName string
+	uploads    fakeUploads
 	avatars    map[string]domain.Avatar
 	openErr    error
 	readErr    error
@@ -49,13 +50,21 @@ func (f *fakeService) MaxSize() int64 { return testMaxSize }
 func (f *fakeService) Upload(_ context.Context, userID, fileName string, r io.Reader) (domain.Avatar, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return domain.Avatar{}, fmt.Errorf("read upload: %w", err)
+		return domain.Avatar{}, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 	}
 	if f.uploadErr != nil {
 		return domain.Avatar{}, f.uploadErr
 	}
 	f.uploaded, f.uploadUser, f.uploadName = data, userID, fileName
 	return domain.Avatar{ID: "a1", UserID: userID, UploadStatus: domain.UploadUploaded, ProcessingStatus: domain.ProcessingPending, CreatedAt: created}, nil
+}
+
+type fakeUploads struct{ rejected int }
+
+func (f *fakeUploads) ObserveUpload(_ context.Context, o domain.Outcome, _ time.Duration) {
+	if o == domain.OutcomeRejected {
+		f.rejected++
+	}
 }
 
 func (f *fakeService) Get(_ context.Context, id string) (domain.Avatar, error) {
@@ -111,7 +120,7 @@ func (f *fakeService) DeleteCurrent(_ context.Context, requesterID, userID strin
 
 func serve(svc *fakeService, req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	NewRouter(Deps{Logger: zap.NewNop(), Avatars: svc}).ServeHTTP(rec, req)
+	NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Avatars: svc, Uploads: &svc.uploads}).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -143,10 +152,11 @@ func TestUploadCreated(t *testing.T) {
 
 func TestUploadErrors(t *testing.T) {
 	tests := map[string]struct {
-		req    func(t *testing.T) *http.Request
-		svcErr error
-		code   int
-		body   string
+		req      func(t *testing.T) *http.Request
+		svcErr   error
+		code     int
+		body     string
+		rejected bool
 	}{
 		"no user": {
 			req: func(t *testing.T) *http.Request {
@@ -154,7 +164,7 @@ func TestUploadErrors(t *testing.T) {
 				r.Header.Del("X-User-ID")
 				return r
 			},
-			code: http.StatusBadRequest, body: `{"error":"Missing X-User-ID header"}`,
+			code: http.StatusBadRequest, body: `{"error":"Missing X-User-ID header"}`, rejected: true,
 		},
 		"not multipart": {
 			req: func(*testing.T) *http.Request {
@@ -162,11 +172,21 @@ func TestUploadErrors(t *testing.T) {
 				r.Header.Set("X-User-ID", "u")
 				return r
 			},
-			code: http.StatusBadRequest, body: `{"error":"Invalid multipart form"}`,
+			code: http.StatusBadRequest, body: `{"error":"Invalid multipart form"}`, rejected: true,
 		},
 		"no file field": {
 			req:  func(t *testing.T) *http.Request { return multipartRequest(t, "avatar", []byte("x")) },
-			code: http.StatusBadRequest, body: `{"error":"Missing file field"}`,
+			code: http.StatusBadRequest, body: `{"error":"Missing file field"}`, rejected: true,
+		},
+		"client gone mid-file": {
+			req: func(t *testing.T) *http.Request {
+				r := multipartRequest(t, "file", []byte("x"))
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				r.Body = io.NopCloser(bytes.NewReader(body[:len(body)-10]))
+				return r
+			},
+			code: http.StatusBadRequest, body: `{"error":"Incomplete upload"}`,
 		},
 		"bad format": {
 			req:    func(t *testing.T) *http.Request { return multipartRequest(t, "file", []byte("x")) },
@@ -190,9 +210,15 @@ func TestUploadErrors(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			rec := serve(&fakeService{uploadErr: tt.svcErr}, tt.req(t))
+			svc := &fakeService{uploadErr: tt.svcErr}
+			rec := serve(svc, tt.req(t))
 			assert.Equal(t, tt.code, rec.Code)
 			assert.JSONEq(t, tt.body, rec.Body.String())
+			if tt.rejected {
+				assert.Equal(t, 1, svc.uploads.rejected, "counted as a rejected upload")
+			} else {
+				assert.Zero(t, svc.uploads.rejected, "outcome is left to the service")
+			}
 		})
 	}
 }
@@ -269,6 +295,8 @@ func TestUserAvatar(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "gopher@example.com", svc.opened.user)
 	assert.Equal(t, domain.Size100, svc.opened.size)
+	assert.Equal(t, "no-cache", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, `"e1"`, rec.Header().Get("ETag"))
 }
 
 func TestUserAvatarPlaceholder(t *testing.T) {
@@ -276,7 +304,7 @@ func TestUserAvatarPlaceholder(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "image/png", rec.Header().Get("Content-Type"))
 	assert.Equal(t, placeholder, rec.Body.Bytes())
-	assert.Equal(t, "public, max-age=300", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", rec.Header().Get("Cache-Control"))
 }
 
 func testAvatar() domain.Avatar {

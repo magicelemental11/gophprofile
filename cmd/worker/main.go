@@ -6,19 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"go.uber.org/zap"
+	"time"
 
 	"github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
 	"github.com/magicelemental11/gophprofile/internal/config"
 	"github.com/magicelemental11/gophprofile/internal/logger"
+	"github.com/magicelemental11/gophprofile/internal/metrics"
 	"github.com/magicelemental11/gophprofile/internal/repository/postgres"
 	"github.com/magicelemental11/gophprofile/internal/service"
 	"github.com/magicelemental11/gophprofile/internal/storage/s3"
+	"github.com/magicelemental11/gophprofile/internal/telemetry"
 	"github.com/magicelemental11/gophprofile/internal/worker"
+)
+
+var version = "dev"
+
+const (
+	serviceName  = "gophprofile-worker"
+	flushTimeout = 5 * time.Second
 )
 
 func main() {
@@ -26,22 +35,33 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	lg, err := logger.New(cfg.LogLevel)
+	lg, err := logger.New(os.Stdout, cfg.LogLevel, serviceName)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func() { _ = lg.Sync() }()
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	if err := run(ctx, cfg, lg); err != nil {
-		lg.Fatal("worker stopped", zap.Error(err))
+	err = run(ctx, cfg, lg)
+	stop()
+	if err != nil {
+		lg.Error("worker stopped", slog.Any("error", err))
+		os.Exit(1)
 	}
 	lg.Info("worker stopped")
 }
 
-func run(ctx context.Context, cfg config.Worker, lg *zap.Logger) error {
+func run(ctx context.Context, cfg config.Worker, lg *slog.Logger) error {
+	flushTraces, err := telemetry.Setup(ctx, telemetry.Config{ServiceName: serviceName, Version: version, Endpoint: cfg.OTLPEndpoint, SampleRatio: cfg.TraceSampleRatio})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushTimeout)
+		defer cancel()
+		if err := flushTraces(flushCtx); err != nil {
+			lg.WarnContext(flushCtx, "flush traces", slog.Any("error", err))
+		}
+	}()
+
 	repo, err := postgres.New(ctx, cfg.DatabaseDSN)
 	if err != nil {
 		return fmt.Errorf("database: %w", err)
@@ -60,7 +80,16 @@ func run(ctx context.Context, cfg config.Worker, lg *zap.Logger) error {
 	}
 	defer func() { _ = broker.Close() }()
 
-	w := worker.New(service.NewProcessor(repo, store, lg), lg, cfg.MaxRetries)
+	m := metrics.New()
+	if err := m.Register(metrics.NewPoolCollector(func() metrics.PoolStat { return repo.PoolStat() })); err != nil {
+		return err
+	}
+	metricsCtx, stopMetrics := context.WithCancel(ctx)
+	defer stopMetrics()
+	metricsErr := make(chan error, 1)
+	go func() { metricsErr <- metrics.Serve(metricsCtx, cfg.MetricsAddress, m.Handler()) }()
+
+	w := worker.New(service.NewProcessor(repo, store, lg), m, lg, cfg.MaxRetries)
 	handle := func(ctx context.Context, m rabbitmq.Message) error {
 		return w.Handle(ctx, worker.Message{ID: m.ID, RoutingKey: m.RoutingKey, Body: m.Body})
 	}
@@ -73,7 +102,7 @@ func run(ctx context.Context, cfg config.Worker, lg *zap.Logger) error {
 	for _, q := range queues {
 		go func() { errCh <- broker.Consume(ctx, q, cfg.Prefetch, handle) }()
 	}
-	lg.Info("worker started", zap.Strings("queues", queues))
+	lg.InfoContext(ctx, "worker started", slog.Any("queues", queues))
 
 	var runErr error
 	select {
@@ -85,6 +114,7 @@ func run(ctx context.Context, cfg config.Worker, lg *zap.Logger) error {
 		}
 	case runErr = <-errCh:
 		queues = queues[1:]
+	case runErr = <-metricsErr:
 	}
 	cancel()
 	for range queues {

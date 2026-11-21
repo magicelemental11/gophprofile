@@ -4,19 +4,19 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/imaging"
 )
 
 func newProcessor(e *env) *Processor {
-	return NewProcessor(e.repo, e.store, zap.NewNop())
+	return NewProcessor(e.repo, e.store, slog.New(slog.DiscardHandler))
 }
 
 func processEvent(id string) domain.AvatarProcessEvent {
@@ -61,8 +61,8 @@ func TestProcessIsIdempotent(t *testing.T) {
 	puts := e.store.puts
 	before, _ := e.repo.Get(context.Background(), a.ID)
 
-	require.NoError(t, p.Process(context.Background(), msg, processEvent(a.ID)), "same message")
-	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), "duplicate event, already completed")
+	require.ErrorIs(t, p.Process(context.Background(), msg, processEvent(a.ID)), ErrDuplicate, "same message")
+	require.ErrorIs(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), ErrDuplicate, "duplicate event, already completed")
 
 	after, _ := e.repo.Get(context.Background(), a.ID)
 	assert.Equal(t, puts, e.store.puts, "no extra uploads")
@@ -90,6 +90,9 @@ func TestProcessPermanentErrors(t *testing.T) {
 
 	e.store.objects[a.S3Key] = []byte("corrupted")
 	assert.ErrorIs(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), ErrPermanent)
+
+	delete(e.store.objects, a.S3Key)
+	assert.ErrorIs(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), ErrPermanent, "original is gone")
 
 	e.store.putFails = 1
 	failed, err := e.svc.Upload(context.Background(), "u", "x.png", bytes.NewReader(pngBytes(t, 5, 5)))
@@ -126,7 +129,7 @@ func TestProcessDeletedMeanwhileRemovesThumbnails(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
 	repo := &deleteOnComplete{fakeRepo: e.repo}
-	p := NewProcessor(repo, e.store, zap.NewNop())
+	p := NewProcessor(repo, e.store, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
 	for _, s := range domain.ThumbnailSizes {
@@ -138,7 +141,7 @@ func TestProcessDeletedMeanwhileRetriesCleanup(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
 	repo := &deleteOnComplete{fakeRepo: e.repo}
-	p := NewProcessor(repo, e.store, zap.NewNop())
+	p := NewProcessor(repo, e.store, slog.New(slog.DiscardHandler))
 	msg := uuid.NewString()
 
 	e.store.delErr = errBoom
@@ -178,6 +181,37 @@ func (r *deleteOnComplete) CompleteProcessing(ctx context.Context, id string, ke
 		return false, err
 	}
 	return r.fakeRepo.CompleteProcessing(ctx, id, keys, msg)
+}
+
+func TestProcessOriginalDeletedMeanwhileIsNotPermanent(t *testing.T) {
+	e := newEnv()
+	a := e.upload(t, "u")
+	repo := &deleteOnProcessing{fakeRepo: e.repo, store: e.store}
+	p := NewProcessor(repo, e.store, slog.New(slog.DiscardHandler))
+
+	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)))
+	for _, k := range domain.ThumbnailKeysOf(a.ID) {
+		assert.False(t, e.store.has(k), k)
+	}
+}
+
+type deleteOnProcessing struct {
+	*fakeRepo
+	store *fakeStore
+}
+
+func (r *deleteOnProcessing) SetProcessingStatus(ctx context.Context, id string, status domain.ProcessingStatus) error {
+	if err := r.fakeRepo.SetProcessingStatus(ctx, id, status); err != nil {
+		return err
+	}
+	a, err := r.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := r.SoftDelete(ctx, id, domain.Event{}); err != nil {
+		return err
+	}
+	return r.store.Delete(ctx, []string{a.S3Key})
 }
 
 func TestMarkFailed(t *testing.T) {
@@ -228,7 +262,7 @@ func TestDeleteFilesIsIdempotent(t *testing.T) {
 	e.repo.processed[msg] = true
 	e.store.delErr = errBoom
 
-	require.NoError(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}))
+	require.ErrorIs(t, p.DeleteFiles(context.Background(), msg, domain.AvatarDeleteEvent{AvatarID: a.ID, S3Keys: a.AllKeys()}), ErrDuplicate)
 	assert.True(t, e.store.has(a.S3Key))
 }
 
@@ -292,7 +326,7 @@ func TestProcessRejectsInvalidAvatarID(t *testing.T) {
 func TestProcessDeletedBeforeStatusUpdate(t *testing.T) {
 	e := newEnv()
 	a := e.upload(t, "u")
-	p := NewProcessor(&deleteOnStatus{fakeRepo: e.repo}, e.store, zap.NewNop())
+	p := NewProcessor(&deleteOnStatus{fakeRepo: e.repo}, e.store, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, p.Process(context.Background(), uuid.NewString(), processEvent(a.ID)), "no retry for a deleted avatar")
 	assert.Zero(t, e.store.puts-1, "no thumbnails uploaded")

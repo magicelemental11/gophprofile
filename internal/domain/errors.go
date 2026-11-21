@@ -9,4 +9,46 @@ var (
 	ErrInvalidFormat = errors.New("invalid file format")
 	ErrTooLarge      = errors.New("file too large")
 	ErrInvalidParam  = errors.New("invalid parameter")
+	// ErrIncompleteUpload means the request body ended or broke before the file was read.
+	ErrIncompleteUpload = errors.New("incomplete upload")
 )
+
+// IsClientError reports whether err is caused by the request rather than by a failure of the service.
+func IsClientError(err error) bool {
+	for _, target := range []error{ErrNotFound, ErrForbidden, ErrInvalidFormat, ErrTooLarge, ErrInvalidParam, ErrIncompleteUpload} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// Outcome is how an operation ended, as reported to monitoring.
+type Outcome string
+
+// Outcomes: rejected is a client error such as a bad file, error is a failure of the service,
+// skipped is a repeated broker message that needed no work.
+const (
+	OutcomeSuccess  Outcome = "success"
+	OutcomeRejected Outcome = "rejected"
+	OutcomeError    Outcome = "error"
+	OutcomeSkipped  Outcome = "skipped"
+)
+
+// Outcomes lists the outcomes of API operations.
+var Outcomes = []Outcome{OutcomeSuccess, OutcomeRejected, OutcomeError}
+
+// MessageOutcomes lists the outcomes of broker messages handled by the worker.
+var MessageOutcomes = []Outcome{OutcomeSuccess, OutcomeError, OutcomeSkipped}
+
+// OutcomeOf classifies the error an operation returned.
+func OutcomeOf(err error) Outcome {
+	switch {
+	case err == nil:
+		return OutcomeSuccess
+	case IsClientError(err):
+		return OutcomeRejected
+	default:
+		return OutcomeError
+	}
+}

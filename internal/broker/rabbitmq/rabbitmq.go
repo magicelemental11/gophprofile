@@ -10,8 +10,13 @@ import (
 
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
+	"github.com/magicelemental11/gophprofile/internal/telemetry"
 )
 
 // Exchanges and queues declared by Dial; failed messages end up in QueueDead.
@@ -114,9 +119,25 @@ func (b *Broker) NotifyClose() <-chan *amqp.Error {
 }
 
 // Publish sends ev as a persistent JSON message with ev.ID as the message id and waits for the broker confirm.
+// The trace context of ctx travels in the message headers.
 func (b *Broker) Publish(ctx context.Context, ev domain.Event) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "publish "+Exchange,
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(append(messageAttrs(ev.ID, ev.RoutingKey),
+			semconv.MessagingDestinationName(Exchange),
+			semconv.MessagingOperationTypeSend,
+		)...))
+	err := b.publish(ctx, ev)
+	telemetry.End(span, err, nil)
+	return err
+}
+
+func (b *Broker) publish(ctx context.Context, ev domain.Event) error {
 	routingKey := ev.RoutingKey
+	headers := amqp.Table{}
+	otel.GetTextMapPropagator().Inject(ctx, headerCarrier(headers))
 	msg := amqp.Publishing{
+		Headers:      headers,
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
 		MessageId:    ev.ID,
@@ -144,7 +165,8 @@ func (b *Broker) Publish(ctx context.Context, ev domain.Event) error {
 
 // Consume handles messages from queue with up to prefetch concurrent handlers until ctx is done.
 // Handled messages are acked, failed ones are rejected to the dead-letter queue. Messages in
-// flight when ctx is canceled are finished before Consume returns.
+// flight when ctx is canceled are finished before Consume returns. Each message is handled in a
+// span continuing the trace from its headers.
 func (b *Broker) Consume(ctx context.Context, queue string, prefetch int, h Handler) error {
 	ch, err := b.conn.Channel()
 	if err != nil {
@@ -172,12 +194,7 @@ func (b *Broker) Consume(ctx context.Context, queue string, prefetch int, h Hand
 		go func() {
 			defer wg.Done()
 			for d := range deliveries {
-				m := Message{ID: d.MessageId, RoutingKey: d.RoutingKey, Body: d.Body}
-				if err := h(handlerCtx, m); err != nil {
-					_ = d.Nack(false, false)
-					continue
-				}
-				_ = d.Ack(false)
+				handle(handlerCtx, queue, d, h)
 			}
 		}()
 	}
@@ -186,4 +203,49 @@ func (b *Broker) Consume(ctx context.Context, queue string, prefetch int, h Hand
 		return fmt.Errorf("consume %s: delivery channel closed", queue)
 	}
 	return nil
+}
+
+func handle(ctx context.Context, queue string, d amqp.Delivery, h Handler) {
+	ctx = otel.GetTextMapPropagator().Extract(ctx, headerCarrier(d.Headers))
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "process "+queue,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(append(messageAttrs(d.MessageId, d.RoutingKey),
+			semconv.MessagingDestinationName(queue),
+			semconv.MessagingOperationTypeProcess,
+		)...))
+	err := h(ctx, Message{ID: d.MessageId, RoutingKey: d.RoutingKey, Body: d.Body})
+	if err != nil {
+		span.SetAttributes(attribute.Bool("messaging.rabbitmq.dead_lettered", true))
+		_ = d.Nack(false, false)
+	} else {
+		_ = d.Ack(false)
+	}
+	telemetry.End(span, err, nil)
+}
+
+const tracerName = "github.com/magicelemental11/gophprofile/internal/broker/rabbitmq"
+
+func messageAttrs(id, routingKey string) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		semconv.MessagingSystemRabbitMQ,
+		semconv.MessagingMessageID(id),
+		semconv.MessagingRabbitMQDestinationRoutingKey(routingKey),
+	}
+}
+
+type headerCarrier amqp.Table
+
+func (c headerCarrier) Get(key string) string {
+	v, _ := c[key].(string)
+	return v
+}
+
+func (c headerCarrier) Set(key, value string) { c[key] = value }
+
+func (c headerCarrier) Keys() []string {
+	keys := make([]string, 0, len(c))
+	for k := range c {
+		keys = append(keys, k)
+	}
+	return keys
 }

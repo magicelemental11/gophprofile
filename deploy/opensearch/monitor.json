@@ -1,0 +1,40 @@
+{
+  "type": "monitor",
+  "name": "gophprofile-error-logs",
+  "monitor_type": "query_level_monitor",
+  "enabled": true,
+  "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
+  "inputs": [{
+    "search": {
+      "indices": ["gophprofile-logs-*"],
+      "query": {
+        "size": 0,
+        "query": {
+          "bool": {
+            "filter": [
+              {"term": {"level": "ERROR"}},
+              {"range": {"@timestamp": {"gte": "{{period_end}}||-5m", "lte": "{{period_end}}", "format": "epoch_millis"}}}
+            ]
+          }
+        },
+        "aggregations": {"by_service": {"terms": {"field": "service"}}}
+      }
+    }
+  }],
+  "triggers": [{
+    "name": "Errors in service logs",
+    "severity": "2",
+    "condition": {"script": {"source": "ctx.results[0].hits.total.value > 0", "lang": "painless"}},
+    "actions": [{
+      "name": "Notify alert receiver",
+      "destination_id": "gophprofile-alert-receiver",
+      "throttle_enabled": true,
+      "throttle": {"value": 10, "unit": "MINUTES"},
+      "subject_template": {"source": "GophProfile: errors in service logs", "lang": "mustache"},
+      "message_template": {
+        "source": "{\"monitor\":\"{{ctx.monitor.name}}\",\"trigger\":\"{{ctx.trigger.name}}\",\"severity\":\"{{ctx.trigger.severity}}\",\"errors\":{{ctx.results.0.hits.total.value}},\"by_service\":\"{{#ctx.results.0.aggregations.by_service.buckets}}{{key}}={{doc_count}} {{/ctx.results.0.aggregations.by_service.buckets}}\",\"period_end\":\"{{ctx.periodEnd}}\",\"search\":\"http://localhost:5601/app/data-explorer/discover#/view/gophprofile-errors\"}",
+        "lang": "mustache"
+      }
+    }]
+  }]
+}

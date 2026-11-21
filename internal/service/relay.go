@@ -2,9 +2,8 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 const relayBatch = 100
@@ -14,12 +13,12 @@ const relayBatch = 100
 type Relay struct {
 	repo     OutboxRepository
 	pub      EventPublisher
-	log      *zap.Logger
+	log      *slog.Logger
 	interval time.Duration
 }
 
 // NewRelay returns a relay that checks the outbox every interval.
-func NewRelay(repo OutboxRepository, pub EventPublisher, log *zap.Logger, interval time.Duration) *Relay {
+func NewRelay(repo OutboxRepository, pub EventPublisher, log *slog.Logger, interval time.Duration) *Relay {
 	return &Relay{repo: repo, pub: pub, log: log, interval: interval}
 }
 
@@ -42,7 +41,7 @@ func (r *Relay) drain(ctx context.Context) {
 		n, err := r.repo.PublishPending(ctx, relayBatch, r.pub.Publish)
 		if err != nil {
 			if ctx.Err() == nil {
-				r.log.Warn("publish outbox events", zap.Int("published", n), zap.Error(err))
+				r.log.WarnContext(ctx, "publish outbox events", slog.Int("published", n), slog.Any("error", err))
 			}
 			return
 		}

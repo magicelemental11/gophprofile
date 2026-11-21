@@ -1,0 +1,12 @@
+{
+  "attributes": {
+    "title": "По trace_id",
+    "description": "Все записи server и worker одного запроса: подставьте значение заголовка X-Trace-ID.",
+    "columns": ["service", "level", "msg", "route", "status", "avatar_id", "span_id"],
+    "sort": [["@timestamp", "asc"]],
+    "kibanaSavedObjectMeta": {
+      "searchSourceJSON": "{\"query\":{\"query\":\"trace_id:*\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"
+    }
+  },
+  "references": [{"name": "kibanaSavedObjectMeta.searchSourceJSON.index", "type": "index-pattern", "id": "gophprofile-logs"}]
+}

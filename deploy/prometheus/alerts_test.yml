@@ -1,0 +1,245 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: upload errors above 10% fire after 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'avatars_uploads_total{status="success"}'
+        values: '0+8x20'
+      - series: 'avatars_uploads_total{status="error"}'
+        values: '0+2x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HighErrorRate
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: More than 10% of avatar uploads fail
+              description: "20% of uploads ended with a server error over the last 5 minutes."
+              runbook_url: https://github.com/magicelemental11/gophprofile#higherrorrate
+
+  - name: rejected uploads and few errors do not fire HighErrorRate
+    interval: 1m
+    input_series:
+      - series: 'avatars_uploads_total{status="success"}'
+        values: '0+10x20'
+      - series: 'avatars_uploads_total{status="rejected"}'
+        values: '0+10x20'
+      - series: 'avatars_uploads_total{status="error"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighErrorRate
+        exp_alerts: []
+
+  - name: slow uploads fire HighResponseTime
+    interval: 1m
+    input_series:
+      - series: 'avatars_upload_duration_seconds_bucket{status="success",le="5"}'
+        values: '0x15'
+      - series: 'avatars_upload_duration_seconds_bucket{status="success",le="10"}'
+        values: '0+10x15'
+      - series: 'avatars_upload_duration_seconds_bucket{status="success",le="+Inf"}'
+        values: '0+10x15'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HighResponseTime
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: HighResponseTime
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Avatar uploads are slow
+              description: "p95 upload duration is 9.75s."
+              runbook_url: https://github.com/magicelemental11/gophprofile#highresponsetime
+
+  - name: fast uploads do not fire HighResponseTime
+    interval: 1m
+    input_series:
+      - series: 'avatars_upload_duration_seconds_bucket{status="success",le="0.5"}'
+        values: '0+10x15'
+      - series: 'avatars_upload_duration_seconds_bucket{status="success",le="5"}'
+        values: '0+10x15'
+      - series: 'avatars_upload_duration_seconds_bucket{status="success",le="+Inf"}'
+        values: '0+10x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighResponseTime
+        exp_alerts: []
+
+  - name: 5xx above 5% fire HTTPHighErrorRate
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{method="GET",route="/api/v1/avatars/{id}",code="200"}'
+        values: '0+9x20'
+      - series: 'http_requests_total{method="POST",route="/api/v1/avatars",code="500"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HTTPHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: More than 5% of HTTP requests end with 5xx
+              description: "10% of requests returned 5xx over the last 5 minutes."
+              runbook_url: https://github.com/magicelemental11/gophprofile#httphigherrorrate
+
+  - name: failing health checks do not fire HTTPHighErrorRate
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{method="GET",route="/api/v1/avatars/{id}",code="200"}'
+        values: '0+1x20'
+      - series: 'http_requests_total{method="GET",route="/health",code="503"}'
+        values: '0+6x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HTTPHighErrorRate
+        exp_alerts: []
+
+  - name: 4xx do not fire HTTPHighErrorRate
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{method="GET",route="/api/v1/avatars/{id}",code="200"}'
+        values: '0+5x20'
+      - series: 'http_requests_total{method="GET",route="/api/v1/avatars/{id}",code="404"}'
+        values: '0+5x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HTTPHighErrorRate
+        exp_alerts: []
+
+  - name: a target down for a minute fires ServiceDown
+    interval: 1m
+    input_series:
+      - series: 'up{job="server",instance="server:9091"}'
+        values: '1 1 0 0 0 0'
+      - series: 'up{job="worker",instance="worker:9091"}'
+        values: '1 1 1 1 1 1'
+      - series: 'up{job="minio",instance="minio:9000"}'
+        values: '0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ServiceDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: server
+              instance: server:9091
+            exp_annotations:
+              summary: server is down
+              description: "Prometheus cannot scrape server:9091."
+              runbook_url: https://github.com/magicelemental11/gophprofile#servicedown
+
+  - name: messages in the DLQ fire DeadLetterQueueGrowing
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_detailed_queue_messages{queue="avatars.dlq"}'
+        values: '0 0 0 2 2'
+      - series: 'worker_dead_lettered_total{operation="process"}'
+        values: '0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DeadLetterQueueGrowing
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: DeadLetterQueueGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Messages are going to the dead-letter queue
+              description: The worker gave up on messages; they wait in avatars.dlq.
+              runbook_url: https://github.com/magicelemental11/gophprofile#deadletterqueuegrowing
+
+  - name: a dead-lettered message fires DeadLetterQueueGrowing even if the DLQ was drained
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_detailed_queue_messages{queue="avatars.dlq"}'
+        values: '0 0 0 0 0'
+      - series: 'worker_dead_lettered_total{operation="delete"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DeadLetterQueueGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Messages are going to the dead-letter queue
+              description: The worker gave up on messages; they wait in avatars.dlq.
+              runbook_url: https://github.com/magicelemental11/gophprofile#deadletterqueuegrowing
+
+  - name: an empty DLQ does not fire
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_detailed_queue_messages{queue="avatars.dlq"}'
+        values: '0x20'
+      - series: 'worker_dead_lettered_total{operation="process"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DeadLetterQueueGrowing
+        exp_alerts: []
+
+  - name: backlogs fire after 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_detailed_queue_messages{queue="avatars.processing"}'
+        values: '80x10'
+      - series: 'outbox_pending_events{job="server",instance="server:9091"}'
+        values: '150x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ProcessingBacklog
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ProcessingBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Thumbnail queue is backing up
+              description: "80 messages wait in avatars.processing."
+              runbook_url: https://github.com/magicelemental11/gophprofile#processingbacklog
+      - eval_time: 3m
+        alertname: OutboxBacklog
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OutboxBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: server
+              instance: server:9091
+            exp_annotations:
+              summary: Outbox events are not being published
+              description: "150 events wait in the outbox."
+              runbook_url: https://github.com/magicelemental11/gophprofile#outboxbacklog
+
+  - name: short spikes do not fire backlog alerts
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_detailed_queue_messages{queue="avatars.processing"}'
+        values: '0 80 80 0 0 80 80 0 0 0'
+      - series: 'outbox_pending_events{job="server",instance="server:9091"}'
+        values: '0 150 150 150 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProcessingBacklog
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: OutboxBacklog
+        exp_alerts: []

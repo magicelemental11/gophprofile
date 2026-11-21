@@ -1,0 +1,38 @@
+service:
+  flush: 1
+  log_level: info
+  http_server: on
+  http_listen: 0.0.0.0
+  http_port: 2020
+
+parsers:
+  - name: json
+    format: json
+
+pipeline:
+  inputs:
+    - name: forward
+      listen: 0.0.0.0
+      port: 24224
+
+  filters:
+    # Docker puts the container output line in "log". JSON lines are expanded into fields and
+    # "log" is dropped; anything else (a panic, a startup error) is indexed unchanged in "log".
+    - name: parser
+      match: 'gophprofile.*'
+      key_name: log
+      parser: json
+      reserve_data: on
+
+  outputs:
+    - name: opensearch
+      match: 'gophprofile.*'
+      host: opensearch
+      port: 9200
+      logstash_format: on
+      logstash_prefix: gophprofile-logs
+      time_key_nanos: on
+      suppress_type_name: on
+      replace_dots: on
+      trace_error: on
+      retry_limit: false

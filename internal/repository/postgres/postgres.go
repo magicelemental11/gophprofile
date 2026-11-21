@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/exaring/otelpgx"
 	"github.com/golang-migrate/migrate/v4"
 	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -13,6 +14,13 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/magicelemental11/gophprofile/internal/domain"
+	"github.com/magicelemental11/gophprofile/internal/telemetry"
 
 	"github.com/magicelemental11/gophprofile/migrations"
 )
@@ -30,9 +38,14 @@ type Repository struct {
 	db   db
 }
 
-// New connects to the database at dsn.
+// New connects to the database at dsn. Queries made within a recorded span get child spans.
 func New(ctx context.Context, dsn string) (*Repository, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse DSN: %w", err)
+	}
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
@@ -74,4 +87,17 @@ func (r *Repository) Migrate() error {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 	return nil
+}
+
+const tracerName = "github.com/magicelemental11/gophprofile/internal/repository/postgres"
+
+func startTx(ctx context.Context, op, avatarID string) (context.Context, trace.Span) {
+	return otel.Tracer(tracerName).Start(ctx, "postgres."+op, trace.WithAttributes(
+		semconv.DBSystemNamePostgreSQL,
+		attribute.String("avatar_id", avatarID),
+	))
+}
+
+func endTx(span trace.Span, err error) {
+	telemetry.End(span, err, func(err error) bool { return errors.Is(err, domain.ErrNotFound) })
 }

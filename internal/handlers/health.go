@@ -2,11 +2,10 @@ package handlers
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 const healthTimeout = 2 * time.Second
@@ -21,7 +20,7 @@ type healthResponse struct {
 	Components map[string]string `json:"components"`
 }
 
-func health(log *zap.Logger, checks map[string]Pinger, timeout time.Duration) http.HandlerFunc {
+func health(log *slog.Logger, checks map[string]Pinger, timeout time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
@@ -35,7 +34,7 @@ func health(log *zap.Logger, checks map[string]Pinger, timeout time.Duration) ht
 				defer wg.Done()
 				state := "ok"
 				if err := p.Ping(ctx); err != nil {
-					log.Warn("health check failed", zap.String("component", name), zap.Error(err))
+					log.WarnContext(ctx, "health check failed", slog.String("component", name), slog.Any("error", err))
 					state = "error"
 				}
 				mu.Lock()

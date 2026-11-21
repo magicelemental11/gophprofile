@@ -39,6 +39,7 @@ func TestLoadServerDefaults(t *testing.T) {
 	assert.Empty(t, cfg.CORSAllowedOrigins)
 	assert.Equal(t, 100, cfg.RateLimitRPS)
 	assert.Equal(t, 10, cfg.UploadRateLimit)
+	assert.InDelta(t, 1.0, cfg.TraceSampleRatio, 0)
 }
 
 func TestLoadServerSecurity(t *testing.T) {
@@ -90,6 +91,9 @@ func TestLoadServerErrors(t *testing.T) {
 		"unknown flag": {args: []string{"-nope"}},
 		"negative rps": {args: append([]string{"-rate-limit-rps", "-1"}, requiredArgs...)},
 		"neg uploads":  {args: append([]string{"-upload-rate-limit", "-1"}, requiredArgs...)},
+		"ratio above":  {args: append([]string{"-trace-sample-ratio", "1.5"}, requiredArgs...)},
+		"ratio env":    {args: requiredArgs, env: map[string]string{"TRACE_SAMPLE_RATIO": "-0.1"}},
+		"ratio nan":    {args: append([]string{"-trace-sample-ratio", "NaN"}, requiredArgs...)},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -116,4 +120,44 @@ func TestLoadWorkerErrors(t *testing.T) {
 	assert.Error(t, err)
 	_, err = LoadWorker(nil)
 	assert.Error(t, err)
+}
+
+func TestLoadTraceSampleRatio(t *testing.T) {
+	t.Setenv("TRACE_SAMPLE_RATIO", "0.1")
+	w, err := LoadWorker(requiredArgs)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.1, w.TraceSampleRatio, 0)
+}
+
+func TestLoadOTLPEndpoint(t *testing.T) {
+	cfg, err := LoadWorker(requiredArgs)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.OTLPEndpoint)
+
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4317")
+	srv, err := LoadServer(requiredArgs)
+	require.NoError(t, err)
+	assert.Equal(t, "http://jaeger:4317", srv.OTLPEndpoint)
+
+	srv, err = LoadServer(append([]string{"-otlp-endpoint", "http://collector:4317"}, requiredArgs...))
+	require.NoError(t, err)
+	assert.Equal(t, "http://collector:4317", srv.OTLPEndpoint)
+}
+
+func TestLoadMetricsAddress(t *testing.T) {
+	srv, err := LoadServer(requiredArgs)
+	require.NoError(t, err)
+	assert.Equal(t, ":9091", srv.MetricsAddress)
+	w, err := LoadWorker(requiredArgs)
+	require.NoError(t, err)
+	assert.Equal(t, ":9092", w.MetricsAddress, "server and worker run side by side locally")
+
+	t.Setenv("METRICS_ADDRESS", ":9200")
+	w, err = LoadWorker(requiredArgs)
+	require.NoError(t, err)
+	assert.Equal(t, ":9200", w.MetricsAddress)
+
+	w, err = LoadWorker(append([]string{"-metrics-address", ":9300"}, requiredArgs...))
+	require.NoError(t, err)
+	assert.Equal(t, ":9300", w.MetricsAddress)
 }

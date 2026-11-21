@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,7 +9,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 )
@@ -17,7 +17,7 @@ func secureRouter(t *testing.T, svc *fakeService, sec Security) http.Handler {
 	t.Helper()
 	web, err := NewWeb(testWebFS)
 	require.NoError(t, err)
-	return NewRouter(Deps{Logger: zap.NewNop(), Avatars: svc, Web: web, Security: sec})
+	return NewRouter(Deps{Logger: slog.New(slog.DiscardHandler), Avatars: svc, Uploads: &svc.uploads, Web: web, Security: sec})
 }
 
 func do(h http.Handler, req *http.Request) *httptest.ResponseRecorder {
@@ -129,6 +129,7 @@ func TestWebUploadInvalidUserID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Invalid user ID")
 	assert.Nil(t, svc.uploaded)
+	assert.Equal(t, 1, svc.uploads.rejected)
 }
 
 func TestImageSecurityHeaders(t *testing.T) {

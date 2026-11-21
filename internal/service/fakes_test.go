@@ -328,3 +328,14 @@ func pngBytes(t *testing.T, w, h int) []byte {
 	require.NoError(t, png.Encode(&buf, img))
 	return buf.Bytes()
 }
+
+type fakeMetrics struct {
+	uploads []domain.Outcome
+	deletes []domain.Outcome
+}
+
+func (m *fakeMetrics) ObserveUpload(_ context.Context, o domain.Outcome, _ time.Duration) {
+	m.uploads = append(m.uploads, o)
+}
+
+func (m *fakeMetrics) ObserveDelete(o domain.Outcome) { m.deletes = append(m.deletes, o) }

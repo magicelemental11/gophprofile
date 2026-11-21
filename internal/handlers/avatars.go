@@ -4,14 +4,16 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 
 	"github.com/magicelemental11/gophprofile/internal/domain"
 	"github.com/magicelemental11/gophprofile/internal/service"
@@ -35,8 +37,9 @@ type AvatarService interface {
 }
 
 type api struct {
-	svc AvatarService
-	log *zap.Logger
+	svc     AvatarService
+	uploads UploadObserver
+	log     *slog.Logger
 }
 
 type uploadResponse struct {
@@ -122,13 +125,22 @@ func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 func (h *api) upload(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	uid, ok := requireUserID(w, r)
 	if !ok {
+		h.uploads.ObserveUpload(r.Context(), domain.OutcomeRejected, time.Since(start))
 		return
 	}
-	a, err := h.receive(w, r, uid)
+	file, err := filePart(w, r, h.svc.MaxSize())
 	if err != nil {
-		h.fail(w, err)
+		h.uploads.ObserveUpload(r.Context(), domain.OutcomeRejected, time.Since(start))
+		h.fail(w, r, err)
+		return
+	}
+	defer file.Close()
+	a, err := h.svc.Upload(r.Context(), uid, file.FileName(), file)
+	if err != nil {
+		h.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", avatarURL(a.ID))
@@ -142,26 +154,24 @@ var (
 	errNoFile       = errors.New("missing file field")
 )
 
-func (h *api) receive(w http.ResponseWriter, r *http.Request, uid string) (domain.Avatar, error) {
-	r.Body = http.MaxBytesReader(w, r.Body, h.svc.MaxSize()+multipartOverhead)
+func filePart(w http.ResponseWriter, r *http.Request, maxSize int64) (*multipart.Part, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize+multipartOverhead)
 	mr, err := r.MultipartReader()
 	if err != nil {
-		return domain.Avatar{}, errNotMultipart
+		return nil, errNotMultipart
 	}
 	for {
 		part, err := mr.NextPart()
 		if errors.Is(err, io.EOF) {
-			return domain.Avatar{}, errNoFile
+			return nil, errNoFile
 		}
 		if err != nil {
-			return domain.Avatar{}, err
+			return nil, fmt.Errorf("%w: %w", domain.ErrIncompleteUpload, err)
 		}
-		if part.FormName() != "file" {
-			_ = part.Close()
-			continue
+		if part.FormName() == "file" {
+			return part, nil
 		}
-		defer part.Close()
-		return h.svc.Upload(r.Context(), uid, part.FileName(), part)
+		_ = part.Close()
 	}
 }
 
@@ -180,67 +190,72 @@ func parseVariant(r *http.Request) (domain.Size, domain.Format, error) {
 func (h *api) image(w http.ResponseWriter, r *http.Request) {
 	size, format, err := parseVariant(r)
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	img, err := h.svc.Open(r.Context(), pathParam(r, "id"), size, format)
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
-	h.sendImage(w, r, img)
+	h.sendImage(w, r, img, cacheImmutable)
 }
 
 func (h *api) userImage(w http.ResponseWriter, r *http.Request) {
 	size, format, err := parseVariant(r)
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	img, err := h.svc.OpenLatest(r.Context(), pathParam(r, "user_id"), size, format)
 	if errors.Is(err, domain.ErrNotFound) {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Content-Disposition", "inline")
-		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.Header().Set("Cache-Control", cacheRevalidate)
 		_, _ = w.Write(placeholder)
 		return
 	}
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
-	h.sendImage(w, r, img)
+	h.sendImage(w, r, img, cacheRevalidate)
 }
 
-func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Image) {
+const (
+	cacheImmutable  = "public, max-age=86400"
+	cacheRevalidate = "no-cache"
+)
+
+func (h *api) sendImage(w http.ResponseWriter, r *http.Request, img service.Image, cacheControl string) {
 	if etagMatches(r.Header.Get("If-None-Match"), img.ETag) {
-		setCacheHeaders(w, img)
+		setCacheHeaders(w, img, cacheControl)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	if r.Method == http.MethodHead {
-		setImageHeaders(w, img)
+		setImageHeaders(w, img, cacheControl)
 		return
 	}
 	body, err := img.Open(r.Context())
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	defer body.Close()
-	setImageHeaders(w, img)
+	setImageHeaders(w, img, cacheControl)
 	if _, err := io.Copy(w, body); err != nil {
-		h.log.Warn("send image", zap.Error(err))
+		h.log.WarnContext(r.Context(), "send image", slog.Any("error", err))
 	}
 }
 
-func setCacheHeaders(w http.ResponseWriter, img service.Image) {
+func setCacheHeaders(w http.ResponseWriter, img service.Image, cacheControl string) {
 	w.Header().Set("ETag", img.ETag)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", cacheControl)
 }
 
-func setImageHeaders(w http.ResponseWriter, img service.Image) {
-	setCacheHeaders(w, img)
+func setImageHeaders(w http.ResponseWriter, img service.Image, cacheControl string) {
+	setCacheHeaders(w, img, cacheControl)
 	w.Header().Set("Content-Type", img.ContentType)
 	w.Header().Set("Content-Disposition", "inline")
 }
@@ -258,7 +273,7 @@ func etagMatches(header, etag string) bool {
 func (h *api) metadata(w http.ResponseWriter, r *http.Request) {
 	a, err := h.svc.Get(r.Context(), pathParam(r, "id"))
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, metadata(a))
@@ -267,7 +282,7 @@ func (h *api) metadata(w http.ResponseWriter, r *http.Request) {
 func (h *api) list(w http.ResponseWriter, r *http.Request) {
 	avatars, err := h.svc.List(r.Context(), pathParam(r, "user_id"))
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	resp := make([]metadataResponse, 0, len(avatars))
@@ -282,7 +297,7 @@ func (h *api) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.respondDeleted(w, h.svc.Delete(r.Context(), uid, pathParam(r, "id")))
+	h.respondDeleted(w, r, h.svc.Delete(r.Context(), uid, pathParam(r, "id")))
 }
 
 func (h *api) deleteCurrent(w http.ResponseWriter, r *http.Request) {
@@ -290,23 +305,23 @@ func (h *api) deleteCurrent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.respondDeleted(w, h.svc.DeleteCurrent(r.Context(), uid, pathParam(r, "user_id")))
+	h.respondDeleted(w, r, h.svc.DeleteCurrent(r.Context(), uid, pathParam(r, "user_id")))
 }
 
-func (h *api) respondDeleted(w http.ResponseWriter, err error) {
+func (h *api) respondDeleted(w http.ResponseWriter, r *http.Request, err error) {
 	if err != nil {
-		h.fail(w, err)
+		h.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *api) fail(w http.ResponseWriter, err error) {
-	code, body := h.classify(err)
+func (h *api) fail(w http.ResponseWriter, r *http.Request, err error) {
+	code, body := h.classify(r.Context(), err)
 	writeJSON(w, code, body)
 }
 
-func (h *api) classify(err error) (int, errorBody) {
+func (h *api) classify(ctx context.Context, err error) (int, errorBody) {
 	var tooLarge *http.MaxBytesError
 	switch {
 	case errors.Is(err, domain.ErrTooLarge), errors.As(err, &tooLarge):
@@ -319,12 +334,14 @@ func (h *api) classify(err error) (int, errorBody) {
 		return http.StatusBadRequest, errorBody{Error: "Invalid multipart form"}
 	case errors.Is(err, errNoFile):
 		return http.StatusBadRequest, errorBody{Error: "Missing file field"}
+	case errors.Is(err, domain.ErrIncompleteUpload):
+		return http.StatusBadRequest, errorBody{Error: "Incomplete upload"}
 	case errors.Is(err, domain.ErrNotFound):
 		return http.StatusNotFound, errorBody{Error: "Avatar not found"}
 	case errors.Is(err, domain.ErrForbidden):
 		return http.StatusForbidden, errorBody{Error: "Forbidden", Details: "You can only delete your own avatars"}
 	default:
-		h.log.Error("request failed", zap.Error(err))
+		h.log.ErrorContext(ctx, "request failed", slog.Any("error", err))
 		return http.StatusInternalServerError, errorBody{Error: "Internal server error"}
 	}
 }
